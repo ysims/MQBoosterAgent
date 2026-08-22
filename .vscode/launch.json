@@ -1,0 +1,22 @@
+{
+	"version": "0.0.1",
+	"boosterAgentConfigType": "agent-debug",
+	"configurations": [
+		{
+			"name": "Agent Debug ",
+			"type": "debugpy",
+			"request": "attach",
+			"connect": {
+				"host": "127.0.0.1",
+				"port": 0
+			},
+			"pathMappings": [
+				{
+					"localRoot": "${workspaceFolder}/src",
+					"remoteRoot": "/opt/booster/booster_agent_data/data/agents/extract/debug-viewlet-agent/agent/debug-viewlet-agent/lib/python3.10/site-packages/debug-viewlet-agent/"
+				}
+			],
+			"justMyCode": false
+		}
+	]
+}
