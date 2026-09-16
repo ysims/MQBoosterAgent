@@ -1,0 +1,23 @@
+# Custom sim image: Booster's own "agent-dev" image with the 3v3 match
+# scene's detection_extension patched in at build time (see
+# scripts/patch_match_scene_detection.py for why -- the stock match scene
+# omits ball/landmark detection entirely, unlike the standalone single-robot
+# scene).
+#
+# This also solves a second, unrelated problem: Booster's own image lives on
+# a registry (booster-robotics-registry.cn-beijing.cr.aliyuncs.com) blocked
+# on some university networks. Build this once somewhere that CAN reach that
+# registry, push the result to your own DockerHub, and students only ever
+# pull from there -- see docker/README.md for the full one-time setup any
+# machine needs before opening Booster Studio.
+#
+# Pin BASE_IMAGE to whatever `docker ps -a` shows Booster Studio actually
+# running right now; it changes across Booster Studio versions, so this
+# image needs rebuilding (same tag bump) whenever that does.
+ARG BASE_IMAGE=booster-robotics-registry.cn-beijing.cr.aliyuncs.com/agent-dev/agent-dev:0.7.21-alpha-humble
+FROM ${BASE_IMAGE}
+
+COPY scripts/patch_match_scene_detection.py /tmp/patch_match_scene_detection.py
+RUN python3 /tmp/patch_match_scene_detection.py \
+        --file /usr/local/booster_robot/booster_robocup_sim/mjcf/football_match_pitch_6_K1.extensions.xml \
+    && rm /tmp/patch_match_scene_detection.py
