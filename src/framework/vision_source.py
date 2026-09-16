@@ -1,40 +1,45 @@
 """Vision + localisation source: a ContextSource built on real sensor topics.
 
-This Docker-only platform layer depends on rclpy, sensor_msgs, nav_msgs, and
+This Docker-only platform layer depends on rclpy, vision_msgs, nav_msgs, and
 std_msgs and is imported only in a ROS environment, mirroring
 ``ros_source.py``. Unlike ``RosContextSource``, it never reads
 ``.../sim/ground_truth/...`` topics: teammate self-pose comes from a plugged
 ``Localiser`` per robot (default: :class:`src.vision.OdomAnchoredLocaliser`
 dead-reckoning ``/robot{name}/odom`` against a pre-measured field anchor),
-and ball/opponent state is derived by running a plugged ``Detector``
-(default: :class:`src.vision.ColorLutDetector`) on each robot's RGB-D camera
-and projecting pixel detections into the field frame.
+and ball state comes from the sim's own ``detection_extension``, which
+publishes ``vision_msgs/Detection2DArray`` on
+``/{robot_name}/soccer/sim/vision/detections`` -- a pixel bounding box per
+object, computed by projecting true object positions through each camera's
+real field-of-view and pose (respecting occlusion), same as a real camera
+would see. Turning that bounding box into a 3D position is a plugged
+``ball_position_estimator`` (default: :func:`src.vision.estimate_ball_position`),
+matching the ``Localiser`` hook's pattern; this class only rotates/
+translates the resulting robot-frame position into the field frame using
+the robot's current pose. See ``scripts/patch_match_scene_detection.py``
+for how this extension gets enabled on the 3v3 match scene, which omits it
+by default.
 
-Per-robot topic naming for real sensors is flat -- just the robot's own
-name, with no ``/team{id}/`` or ``/soccer/sim/`` prefix (confirmed live via
-``ros2 topic list``; this differs from ``RosContextSource``'s ground-truth
-topics, which *are* team-prefixed):
-- RGB: ``/{robot_name}/rgbd_camera/rgb/image_compressed``
-- depth: ``/{robot_name}/rgbd_camera/depth/image_raw``
-- RGB camera info: ``/{robot_name}/rgbd_camera/rgb/camera_info``
-- odometry: ``/{robot_name}/odom`` (``nav_msgs/Odometry``)
+Detection also reports ``Goalpost`` and field-marker positions at known,
+fixed field locations, not currently consumed here -- a natural opening for
+landmark-based localisation correction on top of ``OdomAnchoredLocaliser``'s
+dead reckoning, as a follow-up.
 
 Two semantic differences from ground-truth mode, both intentional:
 1. Ball state is fused across whatever robots currently see it, rather than
    read from one authoritative topic.
-2. Opponent dict keys are transient tracker-assigned IDs, not stable
-   opponent identities -- vision cannot tell opponents apart, only track
-   "an opponent was here." Track IDs may change across a match; strategy
-   code should not assume ``opponents[k]`` refers to the same physical robot
-   over time.
+2. ``detection_extension`` does not detect other robots at all (only Ball,
+   Goalpost, and field markers), so ``Context.opponents`` is always empty
+   under this source. The opponent-tracking machinery below is kept for a
+   future detector that does report robots -- it is simply never fed.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 import rclpy
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
@@ -44,26 +49,14 @@ from rclpy.qos import (
     QoSProfile,
     QoSReliabilityPolicy,
 )
-from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import String as RosString
 
 from .config import SoccerConfig
 from .game_codec import game_control_state_from_json
 from .types import BallState, GameControlState, Pose2D, RobotState, WorldSnapshot
-from .vision_types import (
-    CameraExtrinsics,
-    CameraIntrinsics,
-    Detector,
-    FieldDetection,
-    Localiser,
-    project_to_field,
-)
+from .vision_types import Detection2D, FieldDetection, Localiser
 from ..param import (
     BALL_DETECTION_MAX_AGE_SEC,
-    CAMERA_EXTRINSICS_X,
-    CAMERA_EXTRINSICS_Y,
-    CAMERA_EXTRINSICS_Z,
-    CAMERA_EXTRINSICS_YAW,
     ODOM_FIELD_ANCHOR,
     OPPONENT_TRACK_MATCH_DIST_M,
     OPPONENT_TRACK_MAX_MISS_FRAMES,
@@ -75,10 +68,10 @@ __all__ = ["VisionContextSource"]
 
 _log = logging.getLogger(__name__)
 
-_DEFAULT_EXTRINSICS = CameraExtrinsics(
-    x=CAMERA_EXTRINSICS_X, y=CAMERA_EXTRINSICS_Y,
-    z=CAMERA_EXTRINSICS_Z, yaw=CAMERA_EXTRINSICS_YAW,
-)
+# detection_extension's own class_id strings -> our internal FieldDetection
+# labels. Only Ball is consumed today; Goalpost and field-marker names (see
+# the module docstring) are left for a future landmark-localisation pass.
+_LABEL_MAP = {"Ball": "ball"}
 
 
 class _OpponentTrack:
@@ -94,114 +87,103 @@ class _OpponentTrack:
 
 
 class _RobotVision:
-    """Own one robot's camera subscriptions, detector, and localiser."""
+    """Own one robot's detection subscription and localiser.
+
+    Subscribes directly to the sim's own
+    ``{robot_name}/soccer/sim/vision/detections`` topic via plain ``rclpy``
+    -- a normal ROS topic, no SDK connection needed (see the module
+    docstring for why this replaced a from-pixels RGB detector). Each
+    incoming detection already carries the object's position in this
+    robot's own body frame; converting that to field-frame coordinates only
+    needs the robot's current pose from ``localiser``.
+    """
 
     def __init__(
-        self, node: Any, source: "VisionContextSource",
-        player_id: int, robot_name: str, detector: Detector, localiser: Localiser,
+        self, player_id: int, localiser: Localiser,
+        node: Any, source: "VisionContextSource", topic: str,
     ) -> None:
         self.player_id = player_id
-        self.detector = detector
         self.localiser = localiser
         self._source = source
-        self._lock = threading.Lock()
-        self._depth: Any = None
-        self._intrinsics: CameraIntrinsics | None = None
 
-        img_qos = QoSProfile(
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=1,
-            durability=QoSDurabilityPolicy.VOLATILE,
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+        # Diagnostic counters, logged periodically so a live log dump shows
+        # whether detections are arriving at all and how many are ball
+        # detections, instead of only ever showing "ball=None" downstream.
+        self._messages_seen = 0
+        self._messages_no_pose = 0
+        self._degenerate_bbox = 0
+        self._ball_detections = 0
+        self._logged_first_message = False
+
+        from vision_msgs.msg import Detection2DArray
+
+        self._sub = node.create_subscription(
+            Detection2DArray, topic, self._on_detections, source._qos(depth=10),
         )
-        topic = source._flat_robot_topic
-        self.subscriptions = [
-            node.create_subscription(
-                CompressedImage, topic(robot_name, "rgbd_camera/rgb/image_compressed"),
-                self._on_rgb, img_qos,
-            ),
-            node.create_subscription(
-                Image, topic(robot_name, "rgbd_camera/depth/image_raw"),
-                self._on_depth, img_qos,
-            ),
-            node.create_subscription(
-                CameraInfo, topic(robot_name, "rgbd_camera/rgb/camera_info"),
-                self._on_camera_info, source._qos(depth=1),
-            ),
-        ]
 
-    def _on_camera_info(self, msg: Any) -> None:
-        k = msg.k
-        intrinsics = CameraIntrinsics(fx=float(k[0]), fy=float(k[4]), cx=float(k[2]), cy=float(k[5]))
-        with self._lock:
-            self._intrinsics = intrinsics
-
-    def _on_depth(self, msg: Any) -> None:
-        import numpy as np
-
-        try:
-            row_floats = msg.step // 4
-            arr = np.frombuffer(msg.data, dtype=np.float32).reshape((msg.height, row_floats))
-            depth = arr[:, : msg.width]
-        except Exception as exc:
-            _log.warning("robot %d depth decode failed: %s", self.player_id, exc)
-            return
-        with self._lock:
-            self._depth = depth
-
-    def _on_rgb(self, msg: Any) -> None:
-        import numpy as np
-        import cv2
-
-        try:
-            buf = np.frombuffer(bytes(msg.data), dtype=np.uint8)
-            bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-            if bgr is None:
-                return
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        except Exception as exc:
-            _log.warning("robot %d rgb decode failed: %s", self.player_id, exc)
-            return
-
-        with self._lock:
-            depth = self._depth
-            intrinsics = self._intrinsics
-        if depth is None or intrinsics is None:
-            return
+    def _on_detections(self, msg: Any) -> None:
+        self._messages_seen += 1
+        if not self._logged_first_message:
+            self._logged_first_message = True
+            _log.info(
+                "robot %d vision: first detections message received (%d detections)",
+                self.player_id, len(msg.detections),
+            )
 
         pose = self.localiser.get_pose()
         if pose is None:
+            self._messages_no_pose += 1
+            self._maybe_log_stats()
             return
 
-        try:
-            detections = self.detector.detect(rgb, depth, intrinsics)
-        except Exception as exc:
-            _log.warning("robot %d detector failed: %s", self.player_id, exc)
-            return
-
-        field_detections = []
-        for det in detections:
-            depth_m = self._sample_depth(depth, det.x_px, det.y_px)
-            if depth_m is None:
+        now = time.monotonic()
+        cos_t, sin_t = math.cos(pose.theta), math.sin(pose.theta)
+        field_detections: list[FieldDetection] = []
+        for det in msg.detections:
+            if not det.results:
                 continue
-            field_detections.append(project_to_field(
-                det, depth_m, intrinsics, _DEFAULT_EXTRINSICS, pose, self.player_id,
+            hypothesis = det.results[0].hypothesis
+            label = _LABEL_MAP.get(hypothesis.class_id)
+            if label is None:
+                continue
+
+            bbox = det.bbox
+            detection = Detection2D(
+                x_px=bbox.center.position.x, y_px=bbox.center.position.y,
+                w_px=bbox.size_x, h_px=bbox.size_y,
+                label=label, confidence=float(hypothesis.score) if hypothesis.score else 1.0,
+            )
+            robot_frame = self._source._ball_position_estimator(detection)
+            if robot_frame is None:
+                self._degenerate_bbox += 1
+                continue
+            forward, left = robot_frame
+
+            # Robot body frame (forward, left) -> field frame, using the
+            # robot's own current pose.
+            field_x = pose.x + forward * cos_t - left * sin_t
+            field_y = pose.y + forward * sin_t + left * cos_t
+            field_detections.append(FieldDetection(
+                x=field_x, y=field_y, label=detection.label,
+                confidence=detection.confidence,
+                source_robot_id=self.player_id, timestamp=now,
             ))
+            if label == "ball":
+                self._ball_detections += 1
+
         if field_detections:
             self._source._ingest_detections(field_detections)
+        self._maybe_log_stats()
 
-    @staticmethod
-    def _sample_depth(depth: Any, x_px: float, y_px: float) -> float | None:
-        import math
-
-        h, w = depth.shape[:2]
-        x, y = int(x_px), int(y_px)
-        if x < 0 or y < 0 or x >= w or y >= h:
-            return None
-        value = float(depth[y, x])
-        if not math.isfinite(value) or value <= 0.0:
-            return None
-        return value
+    def _maybe_log_stats(self) -> None:
+        """Log a pipeline summary every ~90 messages (~3s at 30 Hz)."""
+        if self._messages_seen % 90 != 0:
+            return
+        _log.info(
+            "robot %d vision: messages=%d no_pose=%d degenerate_bbox=%d ball_detections=%d",
+            self.player_id, self._messages_seen, self._messages_no_pose,
+            self._degenerate_bbox, self._ball_detections,
+        )
 
 
 class VisionContextSource:
@@ -214,11 +196,12 @@ class VisionContextSource:
 
     def __init__(
         self, config: SoccerConfig, *,
-        detector_class: type[Detector], localiser_class: type[Localiser],
+        localiser_class: type[Localiser],
+        ball_position_estimator: Callable[[Detection2D], tuple[float, float] | None],
     ) -> None:
         self._config = config
-        self._detector_class = detector_class
         self._localiser_class = localiser_class
+        self._ball_position_estimator = ball_position_estimator
         self._lock = threading.RLock()
 
         self._ball_candidates: dict[int, FieldDetection] = {}
@@ -283,13 +266,22 @@ class VisionContextSource:
 
     def _create_robots(self) -> None:
         self._teammate_ids = self._config.player_ids
+        # Team1's own frame needs no rotation relative to raw odom (confirmed
+        # via live calibration); every other team's frame is team1's rotated
+        # 180 degrees, per the fairness argument in OdomAnchoredLocaliser's
+        # docstring. ODOM_FIELD_ANCHOR's constants are already team-relative,
+        # so they're reused unchanged for every team.
+        mirrored = self._config.team_id != 1
         for pid, name in enumerate(self._config.robot_names, start=1):
             anchor_x, anchor_y = ODOM_FIELD_ANCHOR.get(pid, (0.0, 0.0))
             localiser = self._localiser_class(
-                self._node, self._flat_robot_topic(name, "odom"), anchor_x, anchor_y,
+                self._node, self._flat_robot_topic(name, "odom"),
+                anchor_x, anchor_y, mirrored,
             )
-            detector = self._detector_class()
-            self._robots.append(_RobotVision(self._node, self, pid, name, detector, localiser))
+            topic = self._flat_robot_topic(name, "soccer/sim/vision/detections")
+            self._robots.append(
+                _RobotVision(pid, localiser, self._node, self, topic)
+            )
 
     def _teammate_state(self, pid: int) -> RobotState:
         robot = next((r for r in self._robots if r.player_id == pid), None)
@@ -457,12 +449,10 @@ class VisionContextSource:
         self._executor = None
 
     def _destroy_node(self) -> None:
-        for robot in self._robots:
-            for sub in robot.subscriptions:
-                try:
-                    self._node.destroy_subscription(sub)
-                except Exception:
-                    pass
+        # Per-robot subscriptions (detections, and the localiser's own odom
+        # subscription) are plain rclpy subscriptions on self._node; they are
+        # cleaned up when the node itself is destroyed below, same as the
+        # game-controller subscription in self._subscriptions.
         self._robots.clear()
         for sub in self._subscriptions:
             try:

@@ -133,21 +133,22 @@ PLAN_MAX_OFFSET = math.radians(100)     # Maximum offset from target heading (ra
 # Vision / localization tuning
 # ======================================================================
 
-# Fixed robot-frame camera mount offset (m, rad). Camera looks straight ahead.
-CAMERA_EXTRINSICS_X = 0.08
-CAMERA_EXTRINSICS_Y = 0.0
-CAMERA_EXTRINSICS_Z = 0.45
-CAMERA_EXTRINSICS_YAW = 0.0
+# Fixed pinhole camera intrinsics (pixels), calibrated from the sim's own
+# camera at 320x240 resolution. estimate_ball_position() only needs the
+# horizontal axis (ground-plane position, not height); fy/cy would matter
+# for anything using vertical pixel position, e.g. a ground-plane-
+# intersection method.
+CAMERA_FX = 216.5
+CAMERA_CX = 168.0
 
-# ColorLutDetector HSV thresholds (OpenCV ranges: H 0-179, S/V 0-255).
-BALL_HSV_LOWER = (5, 120, 100)      # Orange ball, lower bound
-BALL_HSV_UPPER = (18, 255, 255)     # Orange ball, upper bound
-ROBOT_HSV_LOWER = (100, 100, 60)    # Opponent jersey color, lower bound
-ROBOT_HSV_UPPER = (130, 255, 255)   # Opponent jersey color, upper bound
+# Ball's diameter (m), used with CAMERA_FX to turn "how large the ball's
+# bounding box appears" into a distance estimate (similar triangles):
+# distance = (BALL_DIAMETER_M * CAMERA_FX) / apparent_size_px.
+BALL_DIAMETER_M = 0.19
 
-MIN_BALL_BLOB_AREA_PX = 25.0        # Minimum ball blob area (px^2)
-MIN_ROBOT_BLOB_AREA_PX = 150.0      # Minimum opponent-jersey blob area (px^2)
-DETECTION_MIN_CONFIDENCE = 0.25     # Drop detections scored below this
+# Minimum apparent bounding-box size (px) to trust as a real detection
+# rather than sensor noise.
+MIN_RELIABLE_APPARENT_PX = 6.0
 
 # OdomAnchoredLocaliser: treat the relayed pose as gone after this long silent.
 LOCALISER_STALE_SEC = 1.0

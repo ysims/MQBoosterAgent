@@ -1,13 +1,22 @@
 """Perception implementations, designed for direct user editing.
 
-This is the file to edit when improving perception: swap ``ColorLutDetector``
-for a learned detector (e.g. YOLO), or swap ``OdomAnchoredLocaliser`` for a
-real state estimator (EKF/particle filter fusing IMU/odometry/vision
-field-lines) that corrects drift instead of dead-reckoning forever. Both classes
-satisfy the ``Detector``/``Localiser`` protocols in
-``framework/vision_types.py`` and are wired in as the defaults by
-``main.py``'s ``detector_class``/``localiser_class`` hooks -- swap the class
-there and nothing else in the framework needs to change.
+This is the file to edit when improving perception: swap
+``OdomAnchoredLocaliser`` for a real state estimator (EKF/particle filter
+fusing IMU/odometry/detected landmarks) that corrects drift instead of
+dead-reckoning forever. It satisfies the ``Localiser`` protocol in
+``framework/vision_types.py`` and is wired in as the default by ``main.py``'s
+``localiser_class`` hook -- swap the class there and nothing else in the
+framework needs to change.
+
+The sim's own ``detection_extension`` supplies the raw perception signal --
+a pixel bounding box around the ball, per camera, respecting real
+field-of-view and occlusion (see ``vision_source.py``'s module docstring)
+-- but turning that bounding box into a 3D position is on us, same as it
+would be with a real camera: no depth sensor, so ``estimate_ball_position``
+below estimates distance from how large the ball *appears* (a smaller
+bounding box means farther away), then projects that into the robot's own
+body frame. ``vision_source.py`` calls this for every ball detection and
+rotates the result into field-frame coordinates using the robot's own pose.
 """
 
 from __future__ import annotations
@@ -19,124 +28,57 @@ import time
 from typing import Any
 
 from .framework.types import Pose2D
-from .framework.vision_types import CameraIntrinsics, Detection2D
+from .framework.vision_types import Detection2D
+from .utils.geom import normalize_angle
 from .param import (
-    BALL_HSV_LOWER,
-    BALL_HSV_UPPER,
-    DETECTION_MIN_CONFIDENCE,
+    BALL_DIAMETER_M,
+    CAMERA_CX,
+    CAMERA_FX,
     LOCALISER_STALE_SEC,
-    MIN_BALL_BLOB_AREA_PX,
-    MIN_ROBOT_BLOB_AREA_PX,
-    ROBOT_HSV_LOWER,
-    ROBOT_HSV_UPPER,
+    MIN_RELIABLE_APPARENT_PX,
 )
 
 
-__all__ = ["ColorLutDetector", "OdomAnchoredLocaliser"]
+__all__ = ["OdomAnchoredLocaliser", "estimate_ball_position"]
 
 
 _log = logging.getLogger(__name__)
 
 
-class ColorLutDetector:
-    """HSV color-threshold ball + opponent-jersey detector.
+def estimate_ball_position(detection: Detection2D) -> tuple[float, float] | None:
+    """Estimate the ball's robot-frame (forward, left) position from its bbox.
 
-    Working basic default: threshold the ball's orange and the opponents'
-    jersey color, then treat each large-enough connected blob as one
-    detection. Good enough to bootstrap the framework end to end; a real
-    project should upgrade this to a learned detector (e.g. YOLO) without
-    changing anything outside this class, since ``VisionContextSource`` only
-    depends on the ``Detector`` protocol (``detect(rgb, depth, intrinsics)``).
+    No depth sensor -- distance comes from the ball's *apparent* size via the
+    standard similar-triangles relationship: a real object of known size
+    ``BALL_DIAMETER_M`` projects to a smaller bounding box the farther away
+    it is, in direct proportion to the camera's focal length:
 
-    ``cv2`` is imported lazily inside ``detect`` so importing this module (and
-    the rest of the framework) does not require OpenCV to be installed. If
-    ``cv2`` is unavailable, ``_detect_numpy`` provides a much cruder
-    numpy-only ball-only fallback so the framework still produces *some*
-    signal rather than silently detecting nothing.
+        distance = (true_size * focal_length) / apparent_size_px
+
+    That distance, plus the bounding box's horizontal pixel offset from the
+    image center, gives the lateral (camera-frame x, standard pinhole
+    projection): ``x_cam = (x_px - cx) * distance / fx``. The vertical pixel
+    offset isn't needed: we only want the ball's ground-plane position, not
+    its height. Converting to the robot's own body frame (+x forward, +y
+    left) assumes the camera is mounted at the robot's own origin, facing
+    straight ahead -- a real robot would also need a fixed mount offset
+    here, but the K1's isn't currently calibrated, so this keeps that
+    assumption explicit rather than guessing.
+
+    Returns ``None`` for a degenerate (zero-size) bounding box.
     """
+    apparent_px = (detection.w_px + detection.h_px) / 2.0
+    if apparent_px <= MIN_RELIABLE_APPARENT_PX:
+        return None
 
-    def detect(
-        self, rgb: Any, depth: Any, intrinsics: CameraIntrinsics,
-    ) -> list[Detection2D]:
-        if rgb is None:
-            return []
-        try:
-            import cv2
-        except ImportError:
-            return self._detect_numpy(rgb)
-        return self._detect_cv2(rgb, cv2)
+    distance_m = (BALL_DIAMETER_M * CAMERA_FX) / apparent_px
+    x_cam = (detection.x_px - CAMERA_CX) * distance_m / CAMERA_FX
 
-    def _detect_cv2(self, rgb: Any, cv2: Any) -> list[Detection2D]:
-        import numpy as np
-
-        hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
-        now = time.monotonic()
-        detections: list[Detection2D] = []
-        detections += self._blobs_for_color(
-            hsv, cv2, np, BALL_HSV_LOWER, BALL_HSV_UPPER, "ball",
-            MIN_BALL_BLOB_AREA_PX, now,
-        )
-        detections += self._blobs_for_color(
-            hsv, cv2, np, ROBOT_HSV_LOWER, ROBOT_HSV_UPPER, "robot",
-            MIN_ROBOT_BLOB_AREA_PX, now,
-        )
-        return detections
-
-    def _blobs_for_color(
-        self, hsv: Any, cv2: Any, np: Any,
-        lower: tuple[int, int, int], upper: tuple[int, int, int],
-        label: str, min_area: float, now: float,
-    ) -> list[Detection2D]:
-        mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
-        contours, _ = cv2.findContours(
-            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
-        )
-        out: list[Detection2D] = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < min_area:
-                continue
-            x, y, w, h = cv2.boundingRect(contour)
-            # Cheap confidence proxy: blobs well above the minimum area score
-            # higher, capped at 1.0. A learned detector should replace this
-            # with an actual model score.
-            confidence = min(1.0, area / (min_area * 4.0))
-            if confidence < DETECTION_MIN_CONFIDENCE:
-                continue
-            out.append(Detection2D(
-                x_px=x + w / 2.0, y_px=y + h / 2.0, w_px=float(w), h_px=float(h),
-                label=label, confidence=confidence, camera_id="", timestamp=now,
-            ))
-        return out
-
-    def _detect_numpy(self, rgb: Any) -> list[Detection2D]:
-        """Ball-only fallback bounding-box detector without OpenCV.
-
-        Thresholds directly on RGB channel ratios instead of HSV (no
-        colorspace conversion available), and returns a single detection
-        covering the bounding box of all matching pixels instead of proper
-        connected components. This is deliberately cruder than
-        ``_detect_cv2``; it exists so the framework keeps working if a Docker
-        image ever ships without ``cv2``, not as a design to imitate.
-        """
-        import numpy as np
-
-        r = rgb[:, :, 0].astype(np.int16)
-        g = rgb[:, :, 1].astype(np.int16)
-        b = rgb[:, :, 2].astype(np.int16)
-        # Orange: red channel dominant over both green and blue.
-        mask = (r > 140) & (r - b > 60) & (r - g > 30)
-        ys, xs = np.nonzero(mask)
-        if xs.size < MIN_BALL_BLOB_AREA_PX:
-            return []
-        x0, x1 = int(xs.min()), int(xs.max())
-        y0, y1 = int(ys.min()), int(ys.max())
-        return [Detection2D(
-            x_px=(x0 + x1) / 2.0, y_px=(y0 + y1) / 2.0,
-            w_px=float(x1 - x0 + 1), h_px=float(y1 - y0 + 1),
-            label="ball", confidence=DETECTION_MIN_CONFIDENCE,
-            camera_id="", timestamp=time.monotonic(),
-        )]
+    # Camera optical frame (x right, z forward) -> robot body frame
+    # (x forward, y left).
+    forward = distance_m
+    left = -x_cam
+    return forward, left
 
 
 class OdomAnchoredLocaliser:
@@ -151,21 +93,41 @@ class OdomAnchoredLocaliser:
     sim's ground-truth topic at INITIAL-state spawn -- never at runtime) and
     reports ``odom + anchor`` thereafter.
 
-    This calibration happens to reduce to a pure translation for this sim:
-    ``/robot{N}/odom`` was observed to boot at position (0, 0) with its yaw
-    already equal to field-frame theta (no rotation offset), so
-    ``field_theta`` is just ``odom_yaw`` directly, and ``field_x/y`` is
-    ``odom_x/y + anchor``. Odom drifts significantly even while standing
-    still (bipedal balance sway), so this is a crude dead-reckoning
-    estimate that degrades over a match -- the real upgrade path is fusing
-    ``/imu/data`` and vision-derived field-line detections into an actual
-    filter (EKF/particle filter) that periodically corrects the drift
-    instead of trusting odom forever.
+    For team 1, this calibration reduces to a pure translation: live
+    calibration showed ``/robot{N}/odom`` boots at position (0, 0) with its
+    yaw already equal to team1's field-frame theta (no rotation offset), so
+    ``field_theta = odom_yaw`` and ``field_x/y = odom_x/y + anchor``.
+
+    ``/robot{N}/odom`` is a raw per-robot signal, not team-relative -- unlike
+    the sim's own ground-truth topics, it uses one fixed world convention for
+    every robot regardless of team. But each team's own field frame is
+    team-relative (``+x`` toward *that* team's opponent goal; see
+    ``utils/geom.py``), and since both teams start in an equivalent-looking
+    formation from their own side (a competition-fairness requirement),
+    team1's own frame and team2's own frame are related by a 180 degree
+    rotation about the field center, not a mirror/reflection -- a true axis
+    flip would invert handedness (clockwise vs. counterclockwise), which
+    isn't physically consistent for two views of the same field. Passing
+    ``mirrored=True`` (for any team other than team1) applies that inverse
+    rotation before adding the anchor: ``field_x/y = anchor - odom_x/y``,
+    ``field_theta = odom_yaw + pi``. The anchor constants themselves need no
+    change between teams, since they are already team-relative.
+
+    Odom drifts significantly even while standing still (bipedal balance
+    sway), so this is a crude dead-reckoning estimate that degrades over a
+    match -- the real upgrade path is fusing ``/imu/data`` and
+    vision-derived field-line detections into an actual filter (EKF/particle
+    filter) that periodically corrects the drift instead of trusting odom
+    forever.
     """
 
-    def __init__(self, node: Any, topic: str, anchor_x: float, anchor_y: float) -> None:
+    def __init__(
+        self, node: Any, topic: str, anchor_x: float, anchor_y: float,
+        mirrored: bool = False,
+    ) -> None:
         self._anchor_x = anchor_x
         self._anchor_y = anchor_y
+        self._mirrored = mirrored
         self._lock = threading.Lock()
         self._pose: Pose2D | None = None
         self._last_msg_at: float | None = None
@@ -190,11 +152,18 @@ class OdomAnchoredLocaliser:
         position = msg.pose.pose.position
         orientation = msg.pose.pose.orientation
         yaw = 2.0 * math.atan2(orientation.z, orientation.w)
-        pose = Pose2D(
-            x=float(position.x) + self._anchor_x,
-            y=float(position.y) + self._anchor_y,
-            theta=yaw,
-        )
+        if self._mirrored:
+            pose = Pose2D(
+                x=self._anchor_x - float(position.x),
+                y=self._anchor_y - float(position.y),
+                theta=normalize_angle(yaw + math.pi),
+            )
+        else:
+            pose = Pose2D(
+                x=float(position.x) + self._anchor_x,
+                y=float(position.y) + self._anchor_y,
+                theta=yaw,
+            )
         with self._lock:
             self._pose = pose
             self._last_msg_at = time.monotonic()

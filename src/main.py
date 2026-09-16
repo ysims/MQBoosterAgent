@@ -27,7 +27,7 @@ from .framework.types import KICKING_TEAM_NONE, Context, GameState, SetPlay
 from .param import *
 from .player import Player
 from .utils import dist, opponent_goal, own_goal
-from .vision import ColorLutDetector, OdomAnchoredLocaliser
+from .vision import OdomAnchoredLocaliser, estimate_ball_position
 
 
 _log = logging.getLogger(__name__)
@@ -116,8 +116,8 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
     """3v3 SoccerSim agent."""
 
     player_class = Player
-    detector_class = ColorLutDetector
     localiser_class = OdomAnchoredLocaliser
+    ball_position_estimator = staticmethod(estimate_ball_position)
 
     def init_store(self, store) -> None:
         _log.info("init_store called")

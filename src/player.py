@@ -639,11 +639,11 @@ class Player:
         This places the player on a blocking line between the ball and our goal.
         """
         ctx = self.context
-        if ctx is None:
+        ball = ctx.ball if ctx is not None else None
+        if ctx is None or ball is None:
             self.stop()
             return
 
-        ball = self.context.ball
         gx, gy = own_goal(ctx)
         bx, by = (ball.x, ball.y)
         dx, dy = gx - bx, gy - by

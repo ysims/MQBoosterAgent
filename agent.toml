@@ -8,4 +8,4 @@ debuggable = true
 
 [requirements]
 min_api_level = 10700
-models = [ "Booster T1", "Booster K1" ]
+models = [ "Booster K1" ]

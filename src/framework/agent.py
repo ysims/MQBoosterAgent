@@ -15,7 +15,7 @@ See section 8 of docs/new_design.md for the detailed API.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from booster_agent_framework import AgentFeatures
 
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     from ..player import Player
     from .types import Context
-    from .vision_types import Detector, Localiser
+    from .vision_types import Detection2D, Localiser
 
 
 __all__ = ["SoccerAgentMixin"]
@@ -109,11 +109,17 @@ class SoccerAgentMixin:
     def init_store(self, store: "SimpleNamespace") -> None:
         """Subclasses may override this default no-op."""
 
-    # Hook 4/5: perception defaults for perception_mode="vision" (the
-    # default). main.py sets these explicitly from src.vision so the swap
-    # point is obvious; ignored when perception_mode="ground_truth".
-    detector_class: "type[Detector]"
+    # Hook 4: localiser default for perception_mode="vision" (the default).
+    # main.py sets this explicitly from src.vision so the swap point is
+    # obvious; ignored when perception_mode="ground_truth".
     localiser_class: "type[Localiser]"
+
+    # Hook 5: converts one pixel-space ball Detection2D (from the sim's
+    # detection_extension) into a robot-frame (forward, left) position, or
+    # None for a degenerate detection. main.py sets this to
+    # src.vision.estimate_ball_position (wrapped in staticmethod so it isn't
+    # bound as a method); ignored when perception_mode="ground_truth".
+    ball_position_estimator: "Callable[[Detection2D], tuple[float, float] | None]"
 
     # ------------------------------------------------------------------
     # Framework internals; users normally do not modify these
@@ -148,8 +154,8 @@ class SoccerAgentMixin:
 
         return VisionContextSource(
             self.config,
-            detector_class=self.detector_class,
             localiser_class=self.localiser_class,
+            ball_position_estimator=self.ball_position_estimator,
         )
 
     def _create_backends(self) -> None:
