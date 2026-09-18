@@ -1,15 +1,26 @@
-# This Docker image builds off Booster's "agent-dev" image with the 3v3 match scene's detection_extension added at build time to get access to the vision portion of the robotics pipeline.
+# This Docker image builds off Booster's "virtual-robot" image -- the one
+# Booster Studio actually launches to run the 3v3 match sim -- so that every
+# match starts with detection_extension already patched into the scene.
 #
-# Additionally, Booster's own image lives on a registry blocked on some networks. 
+# Additionally, Booster's own image lives on a registry blocked on some networks.
 # Building this image and pushing to DockerHub provides an alternative way to access the image.
+#
+# The scene's mjcf files don't exist in this image at build time: Booster
+# Studio populates /usr/local/booster_robot/booster_robocup_sim by `docker cp`
+# after the container is created but before it's started, so there's nothing
+# on disk yet for a `RUN` step to patch here. Instead this image overrides the
+# container's CMD with a wrapper that patches the scene right after Booster
+# Studio's copy lands and right before the original startup script runs --
+# see entrypoint_wrapper.sh and scripts/patch_match_scene_detection.py.
 
 ##### STUDENTS #####
 # See docker/README.md on how to set up your project to use the image!
 
-ARG BASE_IMAGE=booster-robotics-registry.cn-beijing.cr.aliyuncs.com/agent-dev/agent-dev:0.7.21-alpha-humble
+ARG BASE_IMAGE=booster-robotics-registry.cn-beijing.cr.aliyuncs.com/virtual-robot/virtual-robot:0.6.5-beta
 FROM ${BASE_IMAGE}
 
-COPY scripts/patch_match_scene_detection.py /tmp/patch_match_scene_detection.py
-RUN python3 /tmp/patch_match_scene_detection.py \
-        --file /usr/local/booster_robot/booster_robocup_sim/mjcf/football_match_pitch_6_K1.extensions.xml \
-    && rm /tmp/patch_match_scene_detection.py
+COPY scripts/patch_match_scene_detection.py /usr/local/bin/patch_match_scene_detection.py
+COPY docker/entrypoint_wrapper.sh /usr/local/bin/entrypoint_wrapper.sh
+RUN chmod +x /usr/local/bin/entrypoint_wrapper.sh
+
+CMD ["/usr/local/bin/entrypoint_wrapper.sh"]
