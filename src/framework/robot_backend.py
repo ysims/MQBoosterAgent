@@ -126,6 +126,21 @@ class SdkConnection:
                 self._player_id, vx, vy, vyaw, exc,
             )
 
+    def raw_set_head_angle(self, pitch: float, yaw: float) -> None:
+        """Set head pitch/yaw (rad); positive pitch is down, positive yaw is left.
+
+        Out-of-limit values don't raise -- the SDK just stops responding to
+        head commands, per its own docs -- so an unexpectedly still head is
+        a clamping/limit problem, not a silent failure to look for here.
+        """
+        try:
+            self._robot.set_head_angle(pitch=pitch, yaw=yaw)
+        except Exception as exc:
+            _log.warning(
+                "player %d set_head_angle(%.3f,%.3f) failed: %s",
+                self._player_id, pitch, yaw, exc,
+            )
+
     # ------------------------------------------------------------------
     # Slow operations, executed nonblockingly by the worker
     # ------------------------------------------------------------------
