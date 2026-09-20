@@ -60,6 +60,16 @@ class RobotBackend:
             return
         self._connection.raw_set_velocity(vx, vy, vyaw)
 
+    def set_head_angle(self, pitch: float, yaw: float) -> None:
+        """Set head pitch/yaw unless outside walk mode (the SDK requires it)."""
+        if self._connection.mode != "walk":
+            _log.debug(
+                "player %d set_head_angle skipped: mode=%s (call request_mode first)",
+                self._player_id, self._connection.mode,
+            )
+            return
+        self._connection.raw_set_head_angle(pitch, yaw)
+
     # ------------------------------------------------------------------
     # Kicking; inputs use body coordinates
     # ------------------------------------------------------------------
