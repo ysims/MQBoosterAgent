@@ -56,6 +56,28 @@ PLAN_STEP = math.radians(15)            # Candidate direction scan step (rad)
 PLAN_MAX_OFFSET = math.radians(100)     # Maximum offset from target heading (rad)
 
 # ======================================================================
+# Gaze planning (head tracking)
+# ======================================================================
+
+# set_head_angle(pitch, yaw): positive pitch is down, positive yaw is left,
+# both in radians. The camera is fixed to the head, not the torso, and a
+# forward-level head loses sight of the ball once it's close enough to sit
+# below the camera's forward-facing field of view -- observed live as
+# "ball unknown" warnings specifically at close range, right when aiming a
+# kick matters most. Pitch ramps from HEAD_PITCH_FAR to HEAD_PITCH_NEAR as
+# the walk/chase target gets closer than HEAD_LOOK_DOWN_RANGE_M, on the
+# assumption that such a target is a reasonable proxy for "where the ball
+# probably still is" even after it drops out of view. These are
+# conservative starting values, not measured against the K1's actual joint
+# limits -- set_head_angle() doesn't error on an out-of-limit value, it
+# just silently stops responding, so retune down rather than up if the
+# head appears to stop moving.
+HEAD_PITCH_FAR = 0.25           # Head pitch (rad) at/beyond HEAD_LOOK_DOWN_RANGE_M
+HEAD_PITCH_NEAR = 0.55          # Head pitch (rad) at distance 0
+HEAD_LOOK_DOWN_RANGE_M = 2.5    # Distance over which pitch ramps far->near (m)
+HEAD_YAW_MAX = 0.6              # Clamp on head yaw (rad) either direction
+
+# ======================================================================
 # Visualization
 # ======================================================================
 
