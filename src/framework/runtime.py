@@ -26,7 +26,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
-    from ..player import Player
+    from ..strategy.player import Player
     from .agent import SoccerAgentMixin
 
 
@@ -173,9 +173,13 @@ class SoccerRuntime:
 
         self._draw_field(ctx)
 
-        if ctx.ball is not None:
+        # Each teammate's own ball belief is drawn separately, not one shared
+        # "the" ball -- see Context.ball's docstring. Disagreement between
+        # robots is visible directly as separate dots rather than hidden by
+        # fusion.
+        for ball in ctx.ball.values():
             debugdraw.point(
-                ctx.ball.x, ctx.ball.y, rgb=(1.0, 0.5, 0.0), scale=0.2, ns="ball",
+                ball.x, ball.y, rgb=(1.0, 0.5, 0.0), scale=0.2, ns="ball",
             )
         # main.py draws teammate shape and labels because kick state belongs to
         # Player and roles belong to play(). Runtime only draws headings and opponents.
@@ -235,7 +239,10 @@ class SoccerRuntime:
 
     def _log_heartbeat(self, ctx: Context, dt: float) -> None:
         ball_repr = (
-            "None" if ctx.ball is None else f"({ctx.ball.x:.2f},{ctx.ball.y:.2f})"
+            ",".join(
+                f"{pid}:({b.x:.2f},{b.y:.2f})" for pid, b in ctx.ball.items()
+            )
+            or "none"
         )
         seen = sum(1 for r in ctx.teammates.values() if r.pose is not None)
         opp_seen = sum(1 for r in ctx.opponents.values() if r.pose is not None)
@@ -260,7 +267,7 @@ class SoccerRuntime:
             team_id=self._config.team_id,
             field=ADULT_FIELD_DIMENSIONS,
             game=self._fresh_game(snap.game, now),
-            ball=self._fresh_ball(snap.ball, now),
+            ball=self._fresh_ball_map(snap.ball, now),
             teammates={
                 pid: self._fresh_robot(r, now) for pid, r in snap.teammates.items()
             },
@@ -278,12 +285,14 @@ class SoccerRuntime:
             return None
         return game
 
-    def _fresh_ball(self, ball: BallState | None, now: float) -> BallState | None:
-        if ball is None:
-            return None
-        if now - ball.last_seen_at > self._config.ball_max_age_sec:
-            return None
-        return ball
+    def _fresh_ball_map(
+        self, ball_map: dict[int, BallState], now: float,
+    ) -> dict[int, BallState]:
+        """Drop any per-robot ball reading older than ``ball_max_age_sec``."""
+        return {
+            pid: ball for pid, ball in ball_map.items()
+            if now - ball.last_seen_at <= self._config.ball_max_age_sec
+        }
 
     def _fresh_robot(self, robot: RobotState, now: float) -> RobotState:
         """Retain the robot but clear a stale pose; see documentation section 9.3."""

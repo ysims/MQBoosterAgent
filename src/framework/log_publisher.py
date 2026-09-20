@@ -1,6 +1,6 @@
 """Bridge Python logging to a ROS topic for rosbag capture and replay.
 
-On the framework side, ros_source calls ``install(node)`` once the node is
+On the framework side, vision_source calls ``install(node)`` once the node is
 ready, attaching the handler to the root logger. Without ROS, the handler is
 not installed and logs continue through the platform logger.
 

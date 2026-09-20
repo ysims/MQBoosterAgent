@@ -1,10 +1,10 @@
 """Vision + localisation source: a ContextSource built on real sensor topics.
 
 This Docker-only platform layer depends on rclpy, vision_msgs, nav_msgs, and
-std_msgs and is imported only in a ROS environment, mirroring
-``ros_source.py``. Unlike ``RosContextSource``, it never reads
-``.../sim/ground_truth/...`` topics: teammate self-pose comes from a plugged
-``Localiser`` per robot (default: :class:`src.vision.OdomAnchoredLocaliser`
+std_msgs and is imported only in a ROS environment. Ball state and teammate
+self-pose deliberately avoid ``.../sim/ground_truth/...`` topics: teammate
+self-pose comes from a plugged ``Localiser`` per robot (default:
+:class:`odometry.dead_reckoning.OdomAnchoredLocaliser`
 dead-reckoning ``/robot{name}/odom`` against a pre-measured field anchor),
 and ball state comes from the sim's own ``detection_extension``, which
 publishes ``vision_msgs/Detection2DArray`` on
@@ -12,25 +12,27 @@ publishes ``vision_msgs/Detection2DArray`` on
 object, computed by projecting true object positions through each camera's
 real field-of-view and pose (respecting occlusion), same as a real camera
 would see. Turning that bounding box into a 3D position is a plugged
-``ball_position_estimator`` (default: :func:`src.vision.estimate_ball_position`),
-matching the ``Localiser`` hook's pattern; this class only rotates/
-translates the resulting robot-frame position into the field frame using
-the robot's current pose. See ``scripts/patch_match_scene_detection.py``
-for how this extension gets enabled on the 3v3 match scene, which omits it
-by default.
+``ball_position_estimator`` (default:
+:func:`vision.ball_detection.estimate_ball_position`), matching the
+``Localiser`` hook's pattern; this class only rotates/translates the
+resulting robot-frame position into the field frame using the robot's
+current pose. See ``scripts/patch_match_scene_detection.py`` for how this
+extension gets enabled on the 3v3 match scene, which omits it by default.
 
 Detection also reports ``Goalpost`` and field-marker positions at known,
 fixed field locations, not currently consumed here -- a natural opening for
 landmark-based localisation correction on top of ``OdomAnchoredLocaliser``'s
 dead reckoning, as a follow-up.
 
-Two semantic differences from ground-truth mode, both intentional:
-1. Ball state is fused across whatever robots currently see it, rather than
-   read from one authoritative topic.
-2. ``detection_extension`` does not detect other robots at all (only Ball,
-   Goalpost, and field markers), so ``Context.opponents`` is always empty
-   under this source. The opponent-tracking machinery below is kept for a
-   future detector that does report robots -- it is simply never fed.
+Ball state is per-robot, not fused across the team (see
+``localisation.ball_localisation.PerRobotBallTracker``): each robot's own
+belief comes only from its own detections, same as each robot's own pose
+comes only from its own odometry. ``Context.ball`` is keyed by player_id for
+exactly this reason. Opponent positions are the one deliberate exception to
+avoiding ground truth: ``detection_extension`` never reports other robots at
+all, so there is no vision-based alternative right now. See
+``vision.opponents_ground_truth.OpponentGroundTruthTracker``, used directly
+below.
 """
 
 from __future__ import annotations
@@ -51,16 +53,14 @@ from rclpy.qos import (
 )
 from std_msgs.msg import String as RosString
 
+from ..localisation.ball_localisation import PerRobotBallTracker
+from ..localisation.config import ODOM_FIELD_ANCHOR
+from ..localisation.protocols import Localiser
+from ..vision.opponents_ground_truth import OpponentGroundTruthTracker
+from ..vision.types import Detection2D, FieldDetection
 from .config import SoccerConfig
 from .game_codec import game_control_state_from_json
-from .types import BallState, GameControlState, Pose2D, RobotState, WorldSnapshot
-from .vision_types import Detection2D, FieldDetection, Localiser
-from ..param import (
-    BALL_DETECTION_MAX_AGE_SEC,
-    ODOM_FIELD_ANCHOR,
-    OPPONENT_TRACK_MATCH_DIST_M,
-    OPPONENT_TRACK_MAX_MISS_FRAMES,
-)
+from .types import GameControlState, RobotState, WorldSnapshot
 
 
 __all__ = ["VisionContextSource"]
@@ -72,18 +72,6 @@ _log = logging.getLogger(__name__)
 # labels. Only Ball is consumed today; Goalpost and field-marker names (see
 # the module docstring) are left for a future landmark-localisation pass.
 _LABEL_MAP = {"Ball": "ball"}
-
-
-class _OpponentTrack:
-    __slots__ = ("track_id", "x", "y", "last_seen_at", "missed", "dirty")
-
-    def __init__(self, track_id: int, x: float, y: float, last_seen_at: float) -> None:
-        self.track_id = track_id
-        self.x = x
-        self.y = y
-        self.last_seen_at = last_seen_at
-        self.missed = 0
-        self.dirty = True
 
 
 class _RobotVision:
@@ -190,8 +178,9 @@ class VisionContextSource:
     """Build WorldSnapshots from real sensor topics rather than ground truth.
 
     Implements runtime's ContextSource protocol: ``start``, ``stop``, and
-    ``get_snapshot``. Opponent dict keys are transient tracker-assigned IDs;
-    see the module docstring.
+    ``get_snapshot``. See the module docstring for why opponent positions
+    (unlike ball/self-pose) come from ground truth via
+    ``OpponentGroundTruthTracker``.
     """
 
     def __init__(
@@ -204,10 +193,9 @@ class VisionContextSource:
         self._ball_position_estimator = ball_position_estimator
         self._lock = threading.RLock()
 
-        self._ball_candidates: dict[int, FieldDetection] = {}
-        self._opponent_tracks: dict[int, _OpponentTrack] = {}
-        self._next_track_id = 1
+        self._ball_tracker = PerRobotBallTracker()
         self._game: GameControlState | None = None
+        self._opponent_tracker: OpponentGroundTruthTracker | None = None
 
         self._robots: list[_RobotVision] = []
         self._teammate_ids: tuple[int, ...] = ()
@@ -230,12 +218,13 @@ class VisionContextSource:
         self._started = True
         self._node = self._create_node()
         self._create_robots()
+        self._opponent_tracker = OpponentGroundTruthTracker(self._node, self._config)
         self._create_game_subscription()
         self._start_spin()
-        from . import debugdraw
-        from . import log_publisher
+        from . import debug_stream, debugdraw, log_publisher
         debugdraw.install(self._node)
         log_publisher.install(self._node)
+        debug_stream.install()
         _log.info(
             "VisionContextSource started: team_id=%d robots=%s",
             self._config.team_id, list(self._config.robot_names),
@@ -253,11 +242,15 @@ class VisionContextSource:
             teammates = {
                 pid: self._teammate_state(pid) for pid in self._teammate_ids
             }
+            opponents = (
+                self._opponent_tracker.get_snapshot()
+                if self._opponent_tracker is not None else {}
+            )
             return WorldSnapshot(
                 game=self._game,
-                ball=self._fuse_ball(),
+                ball=self._ball_tracker.get_all(),
                 teammates=teammates,
-                opponents=self._prune_and_snapshot_tracks(),
+                opponents=opponents,
             )
 
     # ------------------------------------------------------------------
@@ -312,82 +305,17 @@ class VisionContextSource:
             self._game = game
 
     # ------------------------------------------------------------------
-    # Detection ingestion: ball fusion and opponent tracking
+    # Detection ingestion
     # ------------------------------------------------------------------
 
     def _ingest_detections(self, detections: list[FieldDetection]) -> None:
-        with self._lock:
-            for det in detections:
-                if det.label == "ball":
-                    self._ball_candidates[det.source_robot_id] = det
-                elif det.label == "robot":
-                    self._update_track(det)
-
-    def _fuse_ball(self) -> BallState | None:
-        """Pick the highest-confidence, then freshest, fresh ball candidate."""
-        now = time.monotonic()
-        fresh = [
-            c for c in self._ball_candidates.values()
-            if now - c.timestamp <= BALL_DETECTION_MAX_AGE_SEC
-        ]
-        if not fresh:
-            return None
-        best = max(fresh, key=lambda c: (c.confidence, c.timestamp))
-        return BallState(x=best.x, y=best.y, last_seen_at=now, confidence=best.confidence)
-
-    def _update_track(self, det: FieldDetection) -> None:
-        """Greedy nearest-neighbor match against existing opponent tracks."""
-        best_track: _OpponentTrack | None = None
-        best_dist = OPPONENT_TRACK_MATCH_DIST_M
-        for track in self._opponent_tracks.values():
-            d = ((track.x - det.x) ** 2 + (track.y - det.y) ** 2) ** 0.5
-            if d <= best_dist:
-                best_dist = d
-                best_track = track
-        if best_track is None:
-            track_id = self._next_track_id
-            self._next_track_id += 1
-            self._opponent_tracks[track_id] = _OpponentTrack(track_id, det.x, det.y, det.timestamp)
-        else:
-            best_track.x, best_track.y = det.x, det.y
-            best_track.last_seen_at = det.timestamp
-            best_track.dirty = True
-
-    def _prune_and_snapshot_tracks(self) -> dict[int, RobotState]:
-        """Age tracks by ~one runtime tick and drop long-missed ones.
-
-        Called once per ``get_snapshot`` (one runtime tick), so ``missed``
-        counts ticks without a matching detection, matching
-        ``OPPONENT_TRACK_MAX_MISS_FRAMES``'s intent.
-        """
-        dead: list[int] = []
-        result: dict[int, RobotState] = {}
-        for track_id, track in self._opponent_tracks.items():
-            if track.dirty:
-                track.missed = 0
-                track.dirty = False
-            else:
-                track.missed += 1
-            if track.missed > OPPONENT_TRACK_MAX_MISS_FRAMES:
-                dead.append(track_id)
-                continue
-            result[track_id] = RobotState(
-                player_id=track_id,
-                pose=Pose2D(x=track.x, y=track.y, theta=0.0),
-                last_seen_at=track.last_seen_at,
-            )
-        for track_id in dead:
-            del self._opponent_tracks[track_id]
-        return result
+        for det in detections:
+            if det.label == "ball":
+                self._ball_tracker.update(det.source_robot_id, det)
 
     # ------------------------------------------------------------------
-    # Topic names, shared with RosContextSource's convention
+    # Topic names
     # ------------------------------------------------------------------
-
-    def _robot_topic(self, robot_name: str, suffix: str) -> str:
-        if robot_name:
-            return self._join(f"team{self._config.team_id}", robot_name, suffix)
-        return self._join(f"team{self._config.team_id}", suffix)
 
     @staticmethod
     def _flat_robot_topic(robot_name: str, suffix: str) -> str:
@@ -408,7 +336,7 @@ class VisionContextSource:
         )
 
     # ------------------------------------------------------------------
-    # Node and executor lifecycle, mirrored from RosContextSource
+    # Node and executor lifecycle
     # ------------------------------------------------------------------
 
     def _create_node(self) -> Any:

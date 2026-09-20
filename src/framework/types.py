@@ -219,7 +219,12 @@ class GameControlState:
 class Context:
     """Read-only snapshot built by the framework for each call to ``play()``.
 
-    See section 9 of docs/new_design.md for detailed field semantics.
+    ``ball`` is keyed by player_id, one entry per teammate who currently has
+    a fresh ball detection of their own -- there is no single team-wide
+    "the" ball. Each robot's belief comes only from its own camera, mirroring
+    how each robot's own pose comes only from its own odometry; a missing key
+    means that robot doesn't currently see the ball. See section 9 of
+    docs/new_design.md for the other field semantics.
     """
 
     now: float
@@ -227,7 +232,7 @@ class Context:
     team_id: int
     field: FieldDimensions
     game: GameControlState | None = None
-    ball: BallState | None = None
+    ball: dict[int, BallState] = field(default_factory=dict)
     teammates: dict[int, RobotState] = field(default_factory=dict)
     opponents: dict[int, RobotState] = field(default_factory=dict)
 
@@ -239,10 +244,10 @@ class WorldSnapshot:
     A data source such as ROS ground truth only supplies the latest observations
     and their ``last_seen_at`` values. Runtime applies freshness filtering and
     replaces stale data with None when building Context. See section 9.3 of
-    docs/new_design.md.
+    docs/new_design.md. ``ball`` is per-robot; see ``Context.ball``.
     """
 
     game: GameControlState | None = None
-    ball: BallState | None = None
+    ball: dict[int, BallState] = field(default_factory=dict)
     teammates: dict[int, RobotState] = field(default_factory=dict)
     opponents: dict[int, RobotState] = field(default_factory=dict)

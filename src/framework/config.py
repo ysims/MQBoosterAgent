@@ -27,10 +27,6 @@ class SoccerConfig:
     opponent_robot_names: tuple[str, ...] = ()
     control_hz: float = 30.0
     game_controller_topic: str = "/soccer/game_controller"
-    # "vision" (default) requires perceiving the world through camera + self-
-    # localisation; "ground_truth" is an opt-in debug fallback to omniscient
-    # sim topics via RosContextSource.
-    perception_mode: str = "vision"
     # Freshness limits: runtime replaces older data with None when building Context.
     ball_max_age_sec: float = 1.5
     robot_pose_max_age_sec: float = 2.0
@@ -70,7 +66,6 @@ class SoccerConfig:
                 "SOCCER_GAME_CONTROLLER_TOPIC",
                 "/soccer/game_controller",
             ),
-            perception_mode=env.get("SOCCER_PERCEPTION_MODE", "vision"),
         )
 
 

@@ -25,9 +25,10 @@ from .runtime import SoccerRuntime
 if TYPE_CHECKING:
     from types import SimpleNamespace
 
-    from ..player import Player
+    from ..localisation.protocols import Localiser
+    from ..strategy.player import Player
+    from ..vision.types import Detection2D
     from .types import Context
-    from .vision_types import Detection2D, Localiser
 
 
 __all__ = ["SoccerAgentMixin"]
@@ -109,16 +110,15 @@ class SoccerAgentMixin:
     def init_store(self, store: "SimpleNamespace") -> None:
         """Subclasses may override this default no-op."""
 
-    # Hook 4: localiser default for perception_mode="vision" (the default).
-    # main.py sets this explicitly from src.vision so the swap point is
-    # obvious; ignored when perception_mode="ground_truth".
+    # Hook 4: self-pose localiser. strategy/main.py sets this explicitly from
+    # odometry.dead_reckoning so the swap point is obvious.
     localiser_class: "type[Localiser]"
 
     # Hook 5: converts one pixel-space ball Detection2D (from the sim's
     # detection_extension) into a robot-frame (forward, left) position, or
-    # None for a degenerate detection. main.py sets this to
-    # src.vision.estimate_ball_position (wrapped in staticmethod so it isn't
-    # bound as a method); ignored when perception_mode="ground_truth".
+    # None for a degenerate detection. strategy/main.py sets this to
+    # vision.ball_detection.estimate_ball_position (wrapped in staticmethod
+    # so it isn't bound as a method).
     ball_position_estimator: "Callable[[Detection2D], tuple[float, float] | None]"
 
     # ------------------------------------------------------------------
@@ -140,16 +140,11 @@ class SoccerAgentMixin:
         )
 
     def _create_context_source(self):
-        """Build the ContextSource per ``config.perception_mode``.
+        """Build the ContextSource: always vision-based.
 
-        Both imports are delayed Docker-only ROS imports, mirroring
-        ``_create_backends``, so rclpy is not required for development.
+        Delayed Docker-only ROS import, mirroring ``_create_backends``, so
+        rclpy is not required for development.
         """
-        if self.config.perception_mode == "ground_truth":
-            from .ros_source import RosContextSource
-
-            return RosContextSource(self.config)
-
         from .vision_source import VisionContextSource
 
         return VisionContextSource(
@@ -160,7 +155,7 @@ class SoccerAgentMixin:
 
     def _create_backends(self) -> None:
         """Create each player's SDK backend through a delayed Docker-only import."""
-        from .robot_backend import RobotBackend
+        from ..motion.backend import RobotBackend
 
         for player in self.runtime._players:
             robot_name = self.config.robot_names[player.id - 1]
