@@ -42,6 +42,7 @@ from ..motion.config import (
     TURN_THRESHOLD,
 )
 from ..planning.config import PLAN_LOOKAHEAD, USE_GLOBAL_PATH_PLANNER
+from ..planning.gaze_planning import plan_head_angle as _plan_head_angle
 from ..planning.kick_planning import plan_kick as _plan_kick
 from ..planning.path_planning import (
     collect_obstacles,
@@ -212,6 +213,23 @@ class Player:
         self.release_kick()
         self.set_velocity(0.0, 0.0, 0.0)
 
+    def set_head_angle(self, pitch: float, yaw: float) -> None:
+        if self._backend is None:
+            _log.debug(
+                "player %d set_head_angle pitch=%.3f yaw=%.3f (no backend)",
+                self.id, pitch, yaw,
+            )
+            return
+        self._backend.set_head_angle(pitch, yaw)
+
+    def look_at(self, target: tuple[float, float]) -> None:
+        """Point the head toward ``target``; see planning.gaze_planning."""
+        angles = _plan_head_angle(self.pose, target)
+        if angles is None:
+            return
+        pitch, yaw = angles
+        self.set_head_angle(pitch, yaw)
+
     # ------------------------------------------------------------------
     # Kicking
     # ------------------------------------------------------------------
@@ -367,6 +385,8 @@ class Player:
             self.stop()
             return False
 
+        self.look_at(target)
+
         tx, ty = target
         dx = tx - pose.x
         dy = ty - pose.y
@@ -485,6 +505,7 @@ class Player:
         d = dist(self.pose.x, self.pose.y, ball.x, ball.y)
         self._kicking = d <= (KICK_EXIT_M if self._kicking else KICK_ENTER_M)
         if self._kicking:
+            self.look_at((ball.x, ball.y))
             kick_plan = self.plan_kick()
             if kick_plan is None:
                 self.stop()
