@@ -41,9 +41,9 @@ class Detection2D:
 class FieldDetection:
     """One object detection, already resolved to field-frame coordinates.
 
-    ``label`` lets downstream fusion (ball) and tracking (opponents) filter
-    by type. ``source_robot_id`` records which of our own robots produced
-    this detection, for debugging and per-robot fusion weighting.
+    ``label`` lets downstream code filter by type. ``source_robot_id``
+    records which of our own robots produced this detection, for debugging
+    and per-robot tracking.
     """
 
     x: float

@@ -1,13 +1,12 @@
 """Vision + localisation source: a ContextSource built on real sensor topics.
 
 This Docker-only platform layer depends on rclpy, vision_msgs, nav_msgs, and
-std_msgs and is imported only in a ROS environment. Ball state and teammate
-self-pose deliberately avoid ``.../sim/ground_truth/...`` topics: teammate
-self-pose comes from a plugged ``Localiser`` per robot (default:
-:class:`odometry.dead_reckoning.OdomAnchoredLocaliser`
-dead-reckoning ``/robot{name}/odom`` against a pre-measured field anchor),
-and ball state comes from the sim's own ``detection_extension``, which
-publishes ``vision_msgs/Detection2DArray`` on
+std_msgs and is imported only in a ROS environment. Teammate self-pose comes
+from a plugged ``Localiser`` per robot (default:
+:class:`odometry.dead_reckoning.OdomAnchoredLocaliser` dead-reckoning
+``/robot{name}/odom`` against a pre-measured field anchor), and ball state
+comes from the sim's own ``detection_extension``, which publishes
+``vision_msgs/Detection2DArray`` on
 ``/{robot_name}/soccer/sim/vision/detections`` -- a pixel bounding box per
 object, computed by projecting true object positions through each camera's
 real field-of-view and pose (respecting occlusion), same as a real camera
@@ -24,13 +23,12 @@ fixed field locations, not currently consumed here -- a natural opening for
 landmark-based localisation correction on top of ``OdomAnchoredLocaliser``'s
 dead reckoning, as a follow-up.
 
-Ball state is per-robot, not fused across the team (see
-``localisation.ball_localisation.PerRobotBallTracker``): each robot's own
-belief comes only from its own detections, same as each robot's own pose
-comes only from its own odometry. ``Context.ball`` is keyed by player_id for
-exactly this reason. Opponent positions are the one deliberate exception to
-avoiding ground truth: ``detection_extension`` never reports other robots at
-all, so there is no vision-based alternative right now. See
+Ball state is per-robot (see ``localisation.ball_localisation.
+PerRobotBallTracker``): each robot's own belief comes only from its own
+detections, same as each robot's own pose comes only from its own odometry.
+``Context.ball`` is keyed by player_id for exactly this reason.
+``detection_extension`` never reports other robots, so opponent positions
+come from a separate source -- see
 ``vision.opponents_ground_truth.OpponentGroundTruthTracker``, used directly
 below.
 """
@@ -79,11 +77,10 @@ class _RobotVision:
 
     Subscribes directly to the sim's own
     ``{robot_name}/soccer/sim/vision/detections`` topic via plain ``rclpy``
-    -- a normal ROS topic, no SDK connection needed (see the module
-    docstring for why this replaced a from-pixels RGB detector). Each
-    incoming detection already carries the object's position in this
-    robot's own body frame; converting that to field-frame coordinates only
-    needs the robot's current pose from ``localiser``.
+    -- a normal ROS topic, no SDK connection needed. Each incoming detection
+    already carries the object's position in this robot's own body frame;
+    converting that to field-frame coordinates only needs the robot's
+    current pose from ``localiser``.
     """
 
     def __init__(
@@ -175,12 +172,11 @@ class _RobotVision:
 
 
 class VisionContextSource:
-    """Build WorldSnapshots from real sensor topics rather than ground truth.
+    """Build WorldSnapshots from the robots' own sensor topics.
 
     Implements runtime's ContextSource protocol: ``start``, ``stop``, and
-    ``get_snapshot``. See the module docstring for why opponent positions
-    (unlike ball/self-pose) come from ground truth via
-    ``OpponentGroundTruthTracker``.
+    ``get_snapshot``. See the module docstring for how opponent positions
+    are tracked via ``OpponentGroundTruthTracker``.
     """
 
     def __init__(
