@@ -26,6 +26,20 @@ SUPPORT_DIST_M = 3.0
 ATTACKER_KEEP_DIST_MARGIN_M = 0.3  # Prevent attacker-selection oscillation
 GUARD_KEEP_DIST_MARGIN_M = 0.3     # Prevent guard-selection oscillation
 
+# A player's own ball distance jumps to infinity the instant its own vision
+# loses the ball (see Context.ball's docstring -- there's no shared/fused
+# reading to fall back on), which would otherwise fail the keep-margin check
+# above immediately and hand the attacker role to whichever other player
+# currently has any ball reading at all, even briefly. This cooldown holds
+# the current attacker for a short window after any switch regardless of
+# ball distance, giving Player._search_for_ball() (see strategy/player.py)
+# a real chance to reacquire the ball before role reassignment reconsiders.
+# Kept longer than planning.config.SEARCH_MEMORY_SEC on purpose: a shorter
+# cooldown would let the attacker get reassigned mid-search while its
+# remembered ball position is still fresh, cutting the search off before it
+# had the full window it was supposed to get.
+ATTACKER_SWITCH_COOLDOWN_SEC = 6.0
+
 FALLEN_COST = 10.0  # Distance penalty assigned to a fallen player (m)
 
 # ======================================================================

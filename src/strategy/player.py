@@ -41,7 +41,7 @@ from ..motion.config import (
     OMNI_DIST,
     TURN_THRESHOLD,
 )
-from ..planning.config import PLAN_LOOKAHEAD, USE_GLOBAL_PATH_PLANNER
+from ..planning.config import PLAN_LOOKAHEAD, SEARCH_TURN_RATE, USE_GLOBAL_PATH_PLANNER
 from ..planning.gaze_planning import plan_head_angle as _plan_head_angle
 from ..planning.kick_planning import plan_kick as _plan_kick
 from ..planning.path_planning import (
@@ -50,6 +50,7 @@ from ..planning.path_planning import (
     plan_global_path,
     plan_local_heading,
 )
+from ..planning.search_planning import plan_search_target as _plan_search_target
 from ..planning.config import KICK_POWER_DEFAULT
 from ..utils.geom import (
     angle_to,
@@ -126,6 +127,11 @@ class Player:
         # Cross-frame detour-side memory; None means no active detour.
         self._avoid_side: float | None = None
 
+        # Last field-frame position this player's own vision saw the ball,
+        # and when -- used by _search_for_ball() once ball detection lapses.
+        self._last_ball_seen: tuple[float, float] | None = None
+        self._last_ball_seen_at: float | None = None
+
         # Cross-frame kick hysteresis state.
         self._kicking: bool = False
 
@@ -161,12 +167,21 @@ class Player:
         """This player's own ball belief -- not shared with teammates.
 
         There is no team-wide "the" ball (see ``Context.ball``'s docstring);
-        each robot's belief comes only from its own detections.
+        each robot's belief comes only from its own detections. Also caches
+        the reading into ``_last_ball_seen``/``_last_ball_seen_at`` whenever
+        one is available, so ``_search_for_ball`` has something to fall
+        back on once this returns None -- every caller reads through this
+        property, so caching here (rather than requiring each caller to
+        remember to) is the only way to guarantee it never gets missed.
         """
         ctx = self.context
         if ctx is None:
             return None
-        return ctx.ball.get(self.id)
+        ball = ctx.ball.get(self.id)
+        if ball is not None:
+            self._last_ball_seen = (ball.x, ball.y)
+            self._last_ball_seen_at = ctx.now
+        return ball
 
     @property
     def mode(self) -> str | None:
@@ -246,7 +261,26 @@ class Player:
             return
 
         ball = self.ball
-        if ball is None:
+        if ball is not None:
+            bx, by = ball.x, ball.y
+        elif self._kicking:
+            # A kick already in progress shouldn't abort over a single
+            # missed detection -- the kick motion itself (leg/torso
+            # movement) can legitimately block the camera's view of the
+            # ball for a frame or two. Keep aiming at the last known
+            # position instead of releasing immediately: previously ANY
+            # transient dropout mid-kick, even one frame, aborted the kick
+            # outright, which is why kicks were visibly never completing.
+            now = self.context.now if self.context is not None else None
+            remembered = _plan_search_target(
+                self._last_ball_seen, self._last_ball_seen_at, now,
+            )
+            if remembered is None:
+                _log.warning("player %d kick skipped: ball unknown", self.id)
+                self.release_kick()
+                return
+            bx, by = remembered
+        else:
             # Release rather than just warn: kick() only sets self._kicking
             # True in the success path below, never clears it here, and
             # motion.backend.RobotBackend.set_velocity() unconditionally
@@ -254,14 +288,17 @@ class Player:
             # calling kick() every frame regardless of ball visibility (e.g.
             # _act_our_kickoff, which has no ball check of its own) would
             # otherwise leave this player permanently frozen the moment its
-            # own ball detection drops out mid-kick -- a real, observed
-            # failure mode, not just a hypothetical one.
+            # own ball detection drops out -- a real, observed failure mode.
             _log.warning("player %d kick skipped: ball unknown", self.id)
             self.release_kick()
             return
 
         if kick_direction is None:
-            kick_plan = self.plan_kick()
+            # Use the already-resolved bx/by (real or remembered), not
+            # self.plan_kick()'s fresh self.ball read -- that would fail
+            # here for the same reason the top-of-method check needed the
+            # memory fallback in the first place.
+            kick_plan = _plan_kick(self.context, BallState(x=bx, y=by))
             if kick_plan is None:
                 _log.warning("player %d kick skipped: kick plan unavailable", self.id)
                 self.release_kick()
@@ -271,12 +308,12 @@ class Player:
         if self._backend is None:
             _log.debug(
                 "player %d kick ball=(%.3f, %.3f) dir=%.3f (no backend)",
-                self.id, ball.x, ball.y, kick_direction,
+                self.id, bx, by, kick_direction,
             )
             return
         # Transform field coordinates to body coordinates using the current pose.
-        dx = ball.x - pose.x
-        dy = ball.y - pose.y
+        dx = bx - pose.x
+        dy = by - pose.y
         cos_t = math.cos(pose.theta)
         sin_t = math.sin(pose.theta)
         ball_x_body = dx * cos_t + dy * sin_t
@@ -495,18 +532,38 @@ class Player:
         ``CHASE_BEHIND_M`` behind the ball on the ball-to-goal line, naturally
         aligning the player for a shot on arrival.
         """
-        ball = self.ball
-        if ball is None or self.pose is None or self.context is None:
+        if self.pose is None or self.context is None:
             self.stop()
             return
+
+        ball = self.ball
+        if ball is not None:
+            bx, by = ball.x, ball.y
+        elif self._kicking:
+            # Don't drop out of a kick already underway over one missed
+            # frame -- see kick()'s matching fallback for why. Chasing
+            # (the `else` branch below) has no such carve-out: it's only
+            # the commitment of an in-progress kick that's worth protecting.
+            now = self.context.now
+            remembered = _plan_search_target(
+                self._last_ball_seen, self._last_ball_seen_at, now,
+            )
+            if remembered is None:
+                self._search_for_ball()
+                return
+            bx, by = remembered
+        else:
+            self._search_for_ball()
+            return
+
         if kick_target is None:
             kick_target = opponent_goal(self.context)
 
-        d = dist(self.pose.x, self.pose.y, ball.x, ball.y)
+        d = dist(self.pose.x, self.pose.y, bx, by)
         self._kicking = d <= (KICK_EXIT_M if self._kicking else KICK_ENTER_M)
         if self._kicking:
-            self.look_at((ball.x, ball.y))
-            kick_plan = self.plan_kick()
+            self.look_at((bx, by))
+            kick_plan = _plan_kick(self.context, BallState(x=bx, y=by))
             if kick_plan is None:
                 self.stop()
                 return
@@ -515,13 +572,52 @@ class Player:
         else:
             self.release_kick()
             self.walk_to(
-                _behind_ball(ball.x, ball.y, kick_target, CHASE_BEHIND_M)
+                _behind_ball(bx, by, kick_target, CHASE_BEHIND_M)
             )
+
+    def _search_for_ball(self, *, walk: bool = True) -> None:
+        """Look for the ball once this player's own detection has lapsed.
+
+        Looking toward wherever it was last seen -- it's usually still
+        nearby -- gives a real chance of reacquiring it, rather than
+        staring blankly or freezing outright. With ``walk`` True (the
+        default, used by ``attack``/``support``), also walks toward that
+        remembered position, or turns in place once memory has gone stale
+        (see planning.search_planning) to sweep the camera across more of
+        the field. With ``walk`` False (used by ``guard``, which shouldn't
+        abandon its post to chase a memory), only the head moves; sets
+        ``self.action`` only in the walking case, since the non-walking
+        case is a supplement to whatever the caller is already doing, not
+        a replacement for it.
+
+        Combined with the attacker-switch cooldown in strategy/main.py,
+        this is what actually uses that cooldown window productively
+        instead of just idling through it.
+        """
+        now = self.context.now if self.context is not None else None
+        target = _plan_search_target(self._last_ball_seen, self._last_ball_seen_at, now)
+
+        if not walk:
+            if target is not None:
+                self.look_at(target)
+            return
+
+        self.action = "searching"
+        if target is not None:
+            self.look_at(target)
+            self.walk_to(target, avoid_ball=False, avoid_robots=True)
+        else:
+            self.release_kick()
+            self.set_velocity(0.0, 0.0, SEARCH_TURN_RATE)
 
     def guard(self) -> None:
         """Guard from the center of the goal area.
 
         Fall back to that position when no active threat is available.
+        Doesn't abandon its post to chase a remembered ball position the
+        way ``attack``/``support`` do -- a defender wandering off is worse
+        than a defender that's temporarily unsure where the ball is -- but
+        still actively looks for it rather than staring at a fixed heading.
         """
         home = own_goal_area_center(self.context) if self.context is not None else None
         if home is None or self.pose is None:
@@ -544,19 +640,42 @@ class Player:
         )
         self.walk_to(home, face=face, avoid_ball=True, avoid_robots=True)
 
+        # walk_to() just pointed the head at `home` (its own walk target),
+        # which isn't useful for finding the ball -- override that here.
+        if ball is not None:
+            self.look_at((ball.x, ball.y))
+        else:
+            self._search_for_ball(walk=False)
+
     def support(self) -> None:
         """Support on the ball-to-own-goal line at ``SUPPORT_DIST_M``.
 
-        This places the player on a blocking line between the ball and our goal.
+        This places the player on a blocking line between the ball and our
+        goal. Without its own ball reading, falls back to the last
+        remembered position (see planning.search_planning) so it doesn't
+        just freeze in place the moment its own vision loses the ball, and
+        further back to actively searching (like ``attack``) once that's
+        stale too, rather than holding a static position with no idea
+        where the ball actually is.
         """
         ctx = self.context
-        ball = self.ball
-        if ctx is None or ball is None:
+        if ctx is None or self.pose is None:
             self.stop()
             return
+        ball = self.ball
+        if ball is not None:
+            bx, by = ball.x, ball.y
+        else:
+            now = ctx.now
+            remembered = _plan_search_target(
+                self._last_ball_seen, self._last_ball_seen_at, now,
+            )
+            if remembered is None:
+                self._search_for_ball()
+                return
+            bx, by = remembered
 
         gx, gy = own_goal(ctx)
-        bx, by = (ball.x, ball.y)
         dx, dy = gx - bx, gy - by
         d = math.hypot(dx, dy)
         if d < 1e-6:
@@ -573,6 +692,10 @@ class Player:
         tx = clamp(tx, -half_l + 0.3, half_l)
         ty = clamp(ty, -half_w, half_w)
         self.move_to_position((tx, ty))
+
+        # move_to_position() -> walk_to() just pointed the head at (tx, ty)
+        # (the support spot itself), not the ball -- override that here.
+        self.look_at((bx, by))
 
     def take_kickoff(self, kick_target: tuple[float, float] | None = None) -> None:
         """Stage behind the ball for our restart, then approach and kick."""

@@ -30,6 +30,7 @@ from ..utils.geom import dist, opponent_goal, own_goal
 from ..vision.ball_detection import estimate_ball_position
 from .config import (
     ATTACKER_KEEP_DIST_MARGIN_M,
+    ATTACKER_SWITCH_COOLDOWN_SEC,
     FALLEN_COST,
     GUARD_KEEP_DIST_MARGIN_M,
     KICK_POWER_OUR_KICKOFF,
@@ -132,6 +133,7 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
         store.cur_phase = None
         store.kickoff_taker = None    # Locked taker ID, reselected for each kickoff
         store.normal_attacker = None
+        store.attacker_locked_until = 0.0
         store.normal_guard = None
         store.kickoff_guard = None
         store.opp_kickoff_guard = None
@@ -272,6 +274,7 @@ def _log_state_changes(players: list[Player], store) -> None:
 
 def _clear_normal_sticky(store) -> None:
     store.normal_attacker = None
+    store.attacker_locked_until = 0.0
     store.normal_guard = None
 
 
@@ -333,6 +336,35 @@ def _select_closest_attacker(
     )
 
 
+def _select_attacker(context: Context, players: list[Player], store) -> Player | None:
+    """Select the attacker: distance-margin sticky, plus a switch cooldown.
+
+    See ATTACKER_SWITCH_COOLDOWN_SEC's docstring for why the cooldown is
+    needed on top of the distance margin alone -- without it, the current
+    attacker's own ball loss (an instant jump to infinite distance) would
+    trigger a switch the very same frame, every time.
+
+    While the cooldown is active, a locked attacker that's momentarily
+    absent from ``players`` (e.g. one bad frame of ensure_ready() right
+    after a kick's recoil, not an actual long-term problem) returns None
+    rather than picking a substitute -- reassigning here, even briefly,
+    would both hand the role away AND start a fresh cooldown for whoever
+    got it, defeating the entire point of locking it in the first place.
+    No attacker acting for a frame is a much smaller cost than losing the
+    role outright over a single-frame blip.
+    """
+    preferred_id = getattr(store, "normal_attacker", None)
+    locked_until = getattr(store, "attacker_locked_until", 0.0)
+
+    if context.now < locked_until:
+        return next((p for p in players if p.id == preferred_id), None)
+
+    attacker = _select_closest_attacker(context, players, preferred_id)
+    if attacker.id != preferred_id:
+        store.attacker_locked_until = context.now + ATTACKER_SWITCH_COOLDOWN_SEC
+    return attacker
+
+
 def _select_closest_guard(
     context: Context,
     players: list[Player],
@@ -357,15 +389,20 @@ def _act_normal(context: Context, players: list[Player], store) -> None:
     if not players:
         return
 
-    attacker = _select_closest_attacker(
-        context, players, getattr(store, "normal_attacker", None),
-    )
-    store.normal_attacker = attacker.id
-    attacker.action = "attack"
-    attacker.attack()
+    attacker = _select_attacker(context, players, store)
+    rest = players
+    if attacker is not None:
+        # Only update the stored id when we actually have a live attacker --
+        # a None result means the locked attacker is just momentarily
+        # unready, and store.normal_attacker must keep pointing at it so
+        # the lock still means something once it returns (see
+        # _select_attacker's docstring).
+        store.normal_attacker = attacker.id
+        attacker.action = "attack"
+        attacker.attack()
+        rest = [p for p in players if p is not attacker]
 
     # The remaining player nearest our goal becomes the guard.
-    rest = [p for p in players if p is not attacker]
     if rest:
         guard = _select_closest_guard(
             context, rest, getattr(store, "normal_guard", None),

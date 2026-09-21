@@ -78,6 +78,20 @@ HEAD_LOOK_DOWN_RANGE_M = 2.5    # Distance over which pitch ramps far->near (m)
 HEAD_YAW_MAX = 0.6              # Clamp on head yaw (rad) either direction
 
 # ======================================================================
+# Search planning (reacquiring a lost ball)
+# ======================================================================
+
+# How long to trust a remembered ball position after this player's own
+# detection lapses. Longer than BALL_DETECTION_MAX_AGE_SEC (the per-robot
+# detection freshness window in localisation/config.py) on purpose --
+# search only starts once a reading has ALREADY gone stale by that window,
+# so this needs enough margin to cover a real, if brief, tracking gap
+# rather than immediately giving up.
+SEARCH_MEMORY_SEC = 5.0
+
+SEARCH_TURN_RATE = 1.0  # In-place turn rate (rad/s) once memory goes stale
+
+# ======================================================================
 # Visualization
 # ======================================================================
 

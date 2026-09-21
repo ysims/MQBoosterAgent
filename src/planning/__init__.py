@@ -9,4 +9,6 @@ strategy.
   projection
 - gaze_planning: head pitch/yaw decisions to keep the ball in the camera's
   field of view, used by ``strategy.player.Player.look_at``
+- search_planning: where to look/walk to reacquire a lost ball, used by
+  ``strategy.player.Player._search_for_ball``
 """
