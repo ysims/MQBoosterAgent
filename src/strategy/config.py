@@ -27,9 +27,8 @@ ATTACKER_KEEP_DIST_MARGIN_M = 0.3  # Prevent attacker-selection oscillation
 GUARD_KEEP_DIST_MARGIN_M = 0.3     # Prevent guard-selection oscillation
 
 # A player's own ball distance jumps to infinity the instant its own vision
-# loses the ball (see Context.ball's docstring -- there's no shared/fused
-# reading to fall back on), which would otherwise fail the keep-margin check
-# above immediately and hand the attacker role to whichever other player
+# loses the ball, which would otherwise fail the keep-margin check above
+# immediately and hand the attacker role to whichever other player
 # currently has any ball reading at all, even briefly. This cooldown holds
 # the current attacker for a short window after any switch regardless of
 # ball distance, giving Player._search_for_ball() (see strategy/player.py)

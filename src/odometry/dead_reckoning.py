@@ -31,41 +31,37 @@ _log = logging.getLogger(__name__)
 class OdomAnchoredLocaliser:
     """Dead-reckon field-frame self-pose from raw wheel/gait odometry.
 
-    Working basic default: there is no free "sim gives you a good pose"
-    topic -- ``/robot{N}/odom`` (``nav_msgs/Odometry``) is the real signal a
-    robot has, and it is relative: it boots at an arbitrary origin, not the
-    field frame, and drifts. This class calibrates that origin against a
-    fixed, pre-measured field-frame anchor (see ``ODOM_FIELD_ANCHOR`` in
-    ``localisation/config.py``, captured once by comparing ``/robot{N}/odom``
-    against the sim's ground-truth topic at INITIAL-state spawn -- never at
-    runtime) and reports ``odom + anchor`` thereafter.
+    ``/robot{N}/odom`` (``nav_msgs/Odometry``) is a relative signal: it boots
+    at an arbitrary origin, not the field frame, and drifts. This class
+    calibrates that origin against a fixed, pre-measured field-frame anchor
+    (see ``ODOM_FIELD_ANCHOR`` in ``localisation/config.py``, captured once
+    via a live measurement taken at INITIAL-state spawn -- never at runtime)
+    and reports ``odom + anchor`` thereafter.
 
     For team 1, this calibration reduces to a pure translation: live
     calibration showed ``/robot{N}/odom`` boots at position (0, 0) with its
     yaw already equal to team1's field-frame theta (no rotation offset), so
     ``field_theta = odom_yaw`` and ``field_x/y = odom_x/y + anchor``.
 
-    ``/robot{N}/odom`` is a raw per-robot signal, not team-relative -- unlike
-    the sim's own ground-truth topics, it uses one fixed world convention for
-    every robot regardless of team. But each team's own field frame is
-    team-relative (``+x`` toward *that* team's opponent goal; see
-    ``utils/geom.py``), and since both teams start in an equivalent-looking
-    formation from their own side (a competition-fairness requirement),
-    team1's own frame and team2's own frame are related by a 180 degree
-    rotation about the field center, not a mirror/reflection -- a true axis
-    flip would invert handedness (clockwise vs. counterclockwise), which
-    isn't physically consistent for two views of the same field. Passing
-    ``mirrored=True`` (for any team other than team1) applies that inverse
-    rotation before adding the anchor: ``field_x/y = anchor - odom_x/y``,
-    ``field_theta = odom_yaw + pi``. The anchor constants themselves need no
-    change between teams, since they are already team-relative.
+    ``/robot{N}/odom`` is a raw per-robot signal, not team-relative -- it
+    uses one fixed world convention for every robot regardless of team. But
+    each team's own field frame is team-relative (``+x`` toward *that*
+    team's opponent goal; see ``utils/geom.py``), and since both teams start
+    in an equivalent-looking formation from their own side (a
+    competition-fairness requirement), team1's own frame and team2's own
+    frame are related by a 180 degree rotation about the field center, not a
+    mirror/reflection -- a true axis flip would invert handedness (clockwise
+    vs. counterclockwise), which isn't physically consistent for two views
+    of the same field. Passing ``mirrored=True`` (for any team other than
+    team1) applies that inverse rotation before adding the anchor:
+    ``field_x/y = anchor - odom_x/y``, ``field_theta = odom_yaw + pi``. The
+    anchor constants themselves need no change between teams, since they are
+    already team-relative.
 
     Odom drifts significantly even while standing still (bipedal balance
     sway), so this is a crude dead-reckoning estimate that degrades over a
-    match -- the real upgrade path is fusing ``/imu/data`` and
-    vision-derived field-line detections into an actual filter (EKF/particle
-    filter) that periodically corrects the drift instead of trusting odom
-    forever.
+    match -- correcting that drift with a proper filter (EKF/particle filter)
+    fusing ``/imu/data`` and other available signals is the natural next step.
     """
 
     def __init__(

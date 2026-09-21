@@ -237,8 +237,8 @@ class Context:
 class WorldSnapshot:
     """Raw per-frame snapshot supplied by the framework's data source.
 
-    A data source such as ROS ground truth only supplies the latest observations
-    and their ``last_seen_at`` values. Runtime applies freshness filtering and
+    A data source only supplies the latest observations and their
+    ``last_seen_at`` values. Runtime applies freshness filtering and
     replaces stale data with None when building Context. See section 9.3 of
     docs/new_design.md. ``ball`` is per-robot; see ``Context.ball``.
     """

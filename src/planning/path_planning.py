@@ -71,8 +71,7 @@ def collect_obstacles(
 ) -> list[Obstacle]:
     """Collect circular ball, robot, and goal obstacles as requested.
 
-    ``ball_state`` is the calling player's own ball belief (there is no
-    team-wide "the" ball -- see ``Context.ball``'s docstring); pass it
+    ``ball_state`` is the calling player's own ball belief; pass it
     explicitly when ``ball=True``.
     """
     obstacles: list[Obstacle] = []

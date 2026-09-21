@@ -3,6 +3,5 @@
 - protocols: the ``Localiser`` contract that ``odometry``'s dead-reckoning
   class (and any future self-pose estimator) satisfies
 - config: odom calibration anchor and freshness constants
-- ball_localisation: each robot's own ball estimate, kept independent and
-  never fused across robots
+- ball_localisation: each robot's own ball position estimate
 """

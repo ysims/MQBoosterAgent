@@ -1,12 +1,8 @@
 """Ball localisation: each robot's own perceived ball position.
 
-Deliberately NOT fused or averaged across robots -- a robot's ball belief
-comes only from its own detections, exactly like each robot's own self-pose
-comes only from its own odometry (see ``odometry.dead_reckoning``). Pooling
-robots' independent (and independently drifting) beliefs into one shared
-value hides disagreement instead of surfacing it, and lets one robot's bad
-reading silently corrupt another's. ``Context.ball`` is keyed by player_id
-for exactly this reason -- see its docstring in ``framework/types.py``.
+A robot's ball belief comes from its own detections, tracked independently
+per robot and keyed by player_id (see ``Context.ball``'s docstring in
+``framework/types.py``).
 """
 
 from __future__ import annotations

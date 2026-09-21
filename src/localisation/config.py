@@ -7,10 +7,9 @@ from __future__ import annotations
 LOCALISER_STALE_SEC = 1.0
 
 # Odom -> field-frame calibration anchor, captured live at INITIAL-state spawn
-# for this exact deployment (team1, robot1-3; see /robot{N}/odom vs
-# /team1/robot{N}/soccer/sim/ground_truth/robot_pose, both read at match reset
-# before any motion). /robot{N}/odom reliably boots at (x=0, y=0, yaw) with
-# yaw already equal to field-frame theta (no rotation offset observed to
+# for this exact deployment (team1, robot1-3; measured at match reset before
+# any motion). /robot{N}/odom reliably boots at (x=0, y=0, yaw) with yaw
+# already equal to field-frame theta (no rotation offset observed to
 # ~0.001 rad), so only a fixed (x, y) translation per robot is needed:
 #   field_x = odom_x + anchor_x, field_y = odom_y + anchor_y, field_theta = odom_yaw
 # Re-derive these if deployed as team2 or with different robot_names.
@@ -20,5 +19,5 @@ ODOM_FIELD_ANCHOR: dict[int, tuple[float, float]] = {
     3: (-5.99998, 4.97335),
 }
 
-# Ball fusion across robots' detections.
-BALL_DETECTION_MAX_AGE_SEC = 0.5    # Ignore ball detections older than this
+# How long to trust a ball detection before treating it as stale.
+BALL_DETECTION_MAX_AGE_SEC = 0.5

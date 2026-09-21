@@ -1,15 +1,10 @@
-"""Opponent-position ground truth: the one deliberate exception to "no
-ground truth".
+"""Opponent position tracking.
 
 The sim's own vision detector (``detection_extension``) reports the ball,
 goalposts, and field markers, but never other robots -- so there is
-currently no vision-based way to perceive opponents at all. Rather than
-leave ``Context.opponents`` permanently empty, this reads the sim's
-ground-truth opponent pose topics directly. Ball and self-pose are
-deliberately NOT read here -- those go through the vision pipeline (see
-``framework/vision_source.py``) so perception/localisation is still real
-work; only opponent positions are exempted, since there is no alternative
-to exempt them to.
+currently no vision-based way to perceive opponents. This tracks each
+opponent's field-frame pose from the simulator's own pose topic for that
+robot instead, so ``Context.opponents`` isn't left permanently empty.
 
 This is a lightweight helper subscribing on ``VisionContextSource``'s own
 node (passed in), not a standalone ``ContextSource`` -- it owns no node,
@@ -38,7 +33,7 @@ __all__ = ["OpponentGroundTruthTracker"]
 
 
 class OpponentGroundTruthTracker:
-    """Track opponent ground-truth poses via ``/team{id}/{robot_name}/...``."""
+    """Track each opponent's pose via ``/team{id}/{robot_name}/...``."""
 
     def __init__(self, node: Any, config: SoccerConfig) -> None:
         self._config = config

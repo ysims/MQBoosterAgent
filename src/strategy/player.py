@@ -164,15 +164,14 @@ class Player:
 
     @property
     def ball(self) -> BallState | None:
-        """This player's own ball belief -- not shared with teammates.
+        """This player's own ball belief, from its own detections.
 
-        There is no team-wide "the" ball (see ``Context.ball``'s docstring);
-        each robot's belief comes only from its own detections. Also caches
-        the reading into ``_last_ball_seen``/``_last_ball_seen_at`` whenever
-        one is available, so ``_search_for_ball`` has something to fall
-        back on once this returns None -- every caller reads through this
-        property, so caching here (rather than requiring each caller to
-        remember to) is the only way to guarantee it never gets missed.
+        Also caches the reading into ``_last_ball_seen``/
+        ``_last_ball_seen_at`` whenever one is available, so
+        ``_search_for_ball`` has something to fall back on once this returns
+        None -- every caller reads through this property, so caching here
+        (rather than requiring each caller to remember to) is the only way
+        to guarantee it never gets missed.
         """
         ctx = self.context
         if ctx is None:
@@ -268,9 +267,7 @@ class Player:
             # missed detection -- the kick motion itself (leg/torso
             # movement) can legitimately block the camera's view of the
             # ball for a frame or two. Keep aiming at the last known
-            # position instead of releasing immediately: previously ANY
-            # transient dropout mid-kick, even one frame, aborted the kick
-            # outright, which is why kicks were visibly never completing.
+            # position instead of releasing on the first missed frame.
             now = self.context.now if self.context is not None else None
             remembered = _plan_search_target(
                 self._last_ball_seen, self._last_ball_seen_at, now,
@@ -288,7 +285,7 @@ class Player:
             # calling kick() every frame regardless of ball visibility (e.g.
             # _act_our_kickoff, which has no ball check of its own) would
             # otherwise leave this player permanently frozen the moment its
-            # own ball detection drops out -- a real, observed failure mode.
+            # own ball detection drops out.
             _log.warning("player %d kick skipped: ball unknown", self.id)
             self.release_kick()
             return
@@ -441,7 +438,7 @@ class Player:
                 self.stop()
             return True
 
-        # Prefer global A* planning and fall back to the legacy local planner.
+        # Prefer global A* planning and fall back to the local planner.
         goal_dir = math.atan2(dy, dx)
         planned_path: list[tuple[float, float]] | None = None
         waypoint: tuple[float, float] | None = None

@@ -279,11 +279,7 @@ def _clear_normal_sticky(store) -> None:
 
 
 def _player_dist_to_ball(context: Context, p: Player) -> float:
-    """Return a player's distance to its own perceived ball position.
-
-    Each player uses its own belief, not a shared team-wide one -- see
-    ``Context.ball``'s docstring.
-    """
+    """Return a player's distance to its own perceived ball position."""
     ball = context.ball.get(p.id)
     return (
         dist(p.pose.x, p.pose.y, ball.x, ball.y) + _fallen_time_cost(p)
@@ -570,12 +566,9 @@ def _draw_teammate_marker(p: Player) -> None:
 def _analyze_and_draw(context: Context, players: list[Player], store) -> None:
     """Draw each player's distance to its own perceived ball position.
 
-    Each robot's ball belief is independent (see ``Context.ball``'s
-    docstring), so this draws a distance label per teammate using that
-    teammate's own reading rather than one shared value. The ball position
-    itself is drawn per-robot by the runtime (see ``SoccerRuntime._draw_world``);
-    there's no separate opponent distance here since we have no principled
-    per-opponent ball reference to compare against.
+    The ball position itself is drawn per-robot by the runtime (see
+    ``SoccerRuntime._draw_world``). There's no opponent distance drawn here,
+    since opponents don't have a ball reading of their own to measure from.
     """
     from ..framework import debugdraw
 

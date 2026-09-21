@@ -4,9 +4,8 @@ These are pure decision functions -- they choose *where* and *how hard* to
 kick, or *where* to stand to block, but never issue commands.
 ``strategy.player.Player`` calls into these and passes the result to
 ``motion``. ``ball`` is always taken as an explicit parameter rather than
-read off ``context`` -- there is no team-wide "the" ball, only each robot's
-own belief (see ``Context.ball``'s docstring in ``framework/types.py``), so
-the caller resolves its own reading and passes it in.
+read off ``context``, since the caller already has its own resolved reading
+to pass in (see ``Context.ball``'s docstring in ``framework/types.py``).
 """
 
 from __future__ import annotations

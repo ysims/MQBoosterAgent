@@ -8,8 +8,6 @@ Player uses that wrapper for chassis, kicking, and slow operations but does
 not import either module directly -- the agent injects the wrapper during
 runtime construction, keeping player.py platform-independent.
 
-SDK method names match calls verified in the legacy implementation.
-
 Slow operations such as ``request_mode`` and ``get_up`` are synchronous SDK
 calls that can take seconds. This class runs them on a worker thread so the
 main loop remains nonblocking. A single overwrite slot retains only the latest
@@ -32,6 +30,7 @@ __all__ = ["SdkConnection"]
 _log = logging.getLogger(__name__)
 
 _GET_UP_THROTTLE_SEC = 1.0
+_GET_UP_TIMEOUT_SEC = 30.0
 
 
 class SdkConnection:
@@ -231,7 +230,7 @@ class SdkConnection:
         # the 30 Hz control loop.
         try:
             handle = self._robot.get_up()
-            status = handle.wait(timeout=30.0)
+            status = handle.wait(timeout=_GET_UP_TIMEOUT_SEC)
             self._mode = None   # Mode is unknown after getting up; request it again.
             self._fall_down_state = None
             self._fall_down_recoverable = False
