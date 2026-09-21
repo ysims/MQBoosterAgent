@@ -1,20 +1,13 @@
 """Stream live per-tick state as UDP/JSON for an external visual debugger.
 
-Separate from ``debugdraw`` (in-simulator MarkerArray, unverified whether
-Booster Studio actually renders it) and ``log_publisher`` (ROS log topic) --
-this sends one compact JSON packet per tick straight out of the container
-over UDP, so a plain Python script on the host (no ROS, no rclpy, no Docker
-exec) can render a live view. See ``scripts/debug_viz.py`` for the matching
-receiver.
+Thsi is separate from ``debugdraw`` and ``log_publisher`` (ROS log topic) --
+this script sends one JSON packet per tick out of the container over UDP, 
+so a plain Python script on the host  can render a live view. 
 
-Fire-and-forget: a UDP send never raises just because nobody's listening, so
-this is safe to leave installed by default -- an idle receiver costs
-nothing. Target defaults to the container's Docker bridge gateway (find
-yours with ``ip route | grep default`` inside the container; ``172.17.0.1``
-is the default bridge network's usual gateway and is what actually reaches
-the host from inside a standard bridge-networked container). Override with
-``SOCCER_DEBUG_STREAM_HOST``/``SOCCER_DEBUG_STREAM_PORT`` if your setup
-differs (host networking, a custom bridge, a different container runtime).
+UDP does not require that anyone is listening, so this will always run in the 
+background. By default, it targets the container Docker bridge gateway,
+`172.17.0.1`, however if this is not the correct address for your set up,
+use `ip route | grep default` inside the container to find the address.
 """
 
 from __future__ import annotations

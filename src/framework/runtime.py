@@ -173,10 +173,8 @@ class SoccerRuntime:
 
         self._draw_field(ctx)
 
-        # Each teammate's own ball belief is drawn separately, not one shared
-        # "the" ball -- see Context.ball's docstring. Disagreement between
-        # robots is visible directly as separate dots rather than hidden by
-        # fusion.
+        # Each teammate's own ball belief is drawn separately. Disagreement between
+        # robots is visible directly as separate dots.
         for ball in ctx.ball.values():
             debugdraw.point(
                 ball.x, ball.y, rgb=(1.0, 0.5, 0.0), scale=0.2, ns="ball",

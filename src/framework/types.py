@@ -219,12 +219,8 @@ class GameControlState:
 class Context:
     """Read-only snapshot built by the framework for each call to ``play()``.
 
-    ``ball`` is keyed by player_id, one entry per teammate who currently has
-    a fresh ball detection of their own -- there is no single team-wide
-    "the" ball. Each robot's belief comes only from its own camera, mirroring
-    how each robot's own pose comes only from its own odometry; a missing key
-    means that robot doesn't currently see the ball. See section 9 of
-    docs/new_design.md for the other field semantics.
+    ``ball`` is keyed by player_id. Each robot's belief comes only from its own camera. 
+    A missing key means that robot doesn't currently see the ball.
     """
 
     now: float

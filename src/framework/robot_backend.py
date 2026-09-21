@@ -226,16 +226,9 @@ class SdkConnection:
 
     def _exec_get_up(self) -> None:
         # get_up() is asynchronous -- it returns a TaskHandle immediately,
-        # well before the robot has actually finished standing. Declaring
-        # "done" and clearing fall_down_state right after firing it (rather
-        # than waiting for the task to actually finish) lets ensure_ready
-        # believe the robot has recovered mid-animation and request
-        # "prepare"/"walk" while it's still getting up; when the next poll
-        # reasserts the real (still-fallen) state, ensure_ready calls
-        # get_up() again while the first call's task is still running on the
-        # robot, which the SDK rejects ("task 'get_up' is already running").
-        # Waiting here (safe: this runs on the dedicated worker thread, not
-        # the 30 Hz control loop) keeps state and reality in sync.
+        # before the robot has actually finished standing. 
+        # To address this, add a wait. This is safe, as it runs on the dedicated worker thread, not
+        # the 30 Hz control loop.
         try:
             handle = self._robot.get_up()
             status = handle.wait(timeout=30.0)
@@ -246,5 +239,5 @@ class SdkConnection:
         except Exception as exc:
             # Leave state untouched on failure -- the next _poll_fall_down_state
             # call (every worker cycle, before any pending intent is processed)
-            # will pick up reality rather than us guessing at it here.
+            # will pick up the state
             _log.warning("player %d get_up failed: %s", self._player_id, exc)
