@@ -4,4 +4,6 @@
   class (and any future self-pose estimator) satisfies
 - config: odom calibration anchor and freshness constants
 - ball_localisation: each robot's own ball position estimate
+- landmark_localisation: self-pose combining odometry with goalpost-based
+  correction
 """

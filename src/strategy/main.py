@@ -25,7 +25,7 @@ from booster_agent_framework import AgentBase
 
 from ..framework.agent import SoccerAgentMixin
 from ..framework.types import KICKING_TEAM_NONE, Context, GameState, SetPlay
-from ..odometry.dead_reckoning import OdomAnchoredLocaliser
+from ..localisation.landmark_localisation import GoalpostCorrectedLocaliser
 from ..utils.geom import dist, opponent_goal, own_goal
 from ..vision.ball_detection import estimate_ball_position
 from .config import (
@@ -124,7 +124,7 @@ class SoccerSimAgent(SoccerAgentMixin, AgentBase):
     """3v3 SoccerSim agent."""
 
     player_class = Player
-    localiser_class = OdomAnchoredLocaliser
+    localiser_class = GoalpostCorrectedLocaliser
     ball_position_estimator = staticmethod(estimate_ball_position)
 
     def init_store(self, store) -> None:

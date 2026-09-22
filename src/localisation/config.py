@@ -21,3 +21,10 @@ ODOM_FIELD_ANCHOR: dict[int, tuple[float, float]] = {
 
 # How long to trust a ball detection before treating it as stale.
 BALL_DETECTION_MAX_AGE_SEC = 0.5
+
+# GoalpostCorrectedLocaliser: how much a single fresh goalpost sighting
+# moves the running position correction, per update (0-1). A full jump to
+# the newest sighting each time would make the reported pose flicker with
+# every frame's own detection noise; blending smooths that out at the cost
+# of taking a few updates to settle after a large actual correction.
+LANDMARK_CORRECTION_GAIN = 0.2

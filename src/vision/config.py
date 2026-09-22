@@ -1,4 +1,4 @@
-"""Vision tuning constants: camera intrinsics and ball geometry."""
+"""Vision tuning constants: camera intrinsics and object geometry."""
 
 from __future__ import annotations
 
@@ -19,3 +19,8 @@ BALL_DIAMETER_M = 0.205
 # Minimum apparent bounding-box size (px) to trust as a real detection
 # rather than sensor noise.
 MIN_RELIABLE_APPARENT_PX = 3.0
+
+# Goalpost diameter (m): a thin, tall cylinder, so only the bounding box's
+# width constrains distance via its known diameter -- the height instead
+# reflects the post's own tall extent, not distance.
+GOALPOST_DIAMETER_M = 0.10

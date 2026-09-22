@@ -1,12 +1,9 @@
-"""Dead-reckoning self-localiser, designed for direct user editing.
+"""Dead-reckoning self-pose from raw odometry, with no vision input.
 
-This is the file to edit when improving self-localisation: swap
-``OdomAnchoredLocaliser`` for a real state estimator (EKF/particle filter
-fusing IMU/odometry/detected landmarks) that corrects drift instead of
-dead-reckoning forever. It satisfies the ``Localiser`` protocol in
-``localisation/protocols.py`` and is wired in as the default by
-``strategy/main.py``'s ``localiser_class`` hook -- swap the class there and
-nothing else in the framework needs to change.
+Satisfies the ``Localiser`` protocol in ``localisation/protocols.py`` on its
+own, and is also used internally by
+``localisation.landmark_localisation.GoalpostCorrectedLocaliser`` as the
+baseline pose that goalpost sightings correct.
 """
 
 from __future__ import annotations
@@ -60,8 +57,7 @@ class OdomAnchoredLocaliser:
 
     Odom drifts significantly even while standing still (bipedal balance
     sway), so this is a crude dead-reckoning estimate that degrades over a
-    match -- correcting that drift with a proper filter (EKF/particle filter)
-    fusing ``/imu/data`` and other available signals is the natural next step.
+    match on its own, with no correction applied here.
     """
 
     def __init__(
