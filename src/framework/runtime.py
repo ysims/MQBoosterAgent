@@ -1,9 +1,8 @@
 """Framework runtime for the 30 Hz loop, Context construction, and Players.
 
-Context data comes from an injected ContextSource, normally the Phase 2 ROS
-source. Without one, development and test runs build an empty Context each
-frame. This layer uniformly replaces stale data with None; see section 9.3 of
-docs/new_design.md.
+Context data comes from an injected ContextSource -- normally
+``VisionContextSource``. Without one, development and test runs build an
+empty Context each frame. This layer uniformly replaces stale data with None.
 """
 
 from __future__ import annotations

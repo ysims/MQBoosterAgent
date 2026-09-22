@@ -8,8 +8,6 @@ only user base because SoccerAgent, rather than AgentBase, would be direct.
 The solution is to place framework behavior in a mixin that does not inherit
 AgentBase. User entry classes declare
 ``class MyAgent(SoccerAgentMixin, AgentBase)`` so AgentBase remains direct.
-
-See section 8 of docs/new_design.md for the detailed API.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Core data types: the framework's data contract layer.
 
-The fields map directly to section 9 of docs/new_design.md. This module has no
-ROS or boosteros dependencies and can be imported, tested, and reloaded alone.
+This module has no ROS or boosteros dependencies and can be imported,
+tested, and reloaded alone.
 """
 
 from __future__ import annotations
@@ -108,8 +108,8 @@ class Pose2D:
 class FieldDimensions:
     """Field geometry dimensions, containing values only.
 
-    Geometry helpers such as ``opponent_goal`` belong in the standard library
-    or user code. See section 9.3 of docs/new_design.md.
+    Geometry helpers such as ``opponent_goal`` belong in ``utils/geom.py``
+    or user code.
     """
 
     length: float
@@ -239,8 +239,8 @@ class WorldSnapshot:
 
     A data source only supplies the latest observations and their
     ``last_seen_at`` values. Runtime applies freshness filtering and
-    replaces stale data with None when building Context. See section 9.3 of
-    docs/new_design.md. ``ball`` is per-robot; see ``Context.ball``.
+    replaces stale data with None when building Context. ``ball`` is
+    per-robot; see ``Context.ball``.
     """
 
     game: GameControlState | None = None

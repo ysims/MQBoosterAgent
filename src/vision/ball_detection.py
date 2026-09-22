@@ -38,8 +38,7 @@ def estimate_ball_position(detection: Detection2D) -> tuple[float, float] | None
     its height. Converting to the robot's own body frame (+x forward, +y
     left) assumes the camera is mounted at the robot's own origin, facing
     straight ahead -- a real robot would also need a fixed mount offset
-    here, but the K1's isn't currently calibrated, so this keeps that
-    assumption explicit rather than guessing.
+    here, but the K1's isn't currently calibrated.
 
     Returns ``None`` for a degenerate (zero-size) bounding box.
     """
