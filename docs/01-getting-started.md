@@ -6,7 +6,7 @@ This guide takes you through setting up Booster Studio and the MQBoosterAgent, s
 
 Booster Studio is a clone of VS Code, a popular open-source IDE created by Microsoft. If you are familiar with VS Code, you can set up Booster Studio similarly to your VS Code set up, including the same extensions.
 
-Booster Studio is created by [Booster Robotics](https://www.booster.tech/), manufactorers of humanoid robots. Booster robots have become the most popular platform in RoboCup soccer competitions, due to their ability to play soccer off-the-self, and their reasonably low cost. Some Booster Robotics employees are previous RoboCup competitors. 
+Booster Studio is created by [Booster Robotics](https://www.booster.tech/), manufacturers of humanoid robots. Booster robots have become the most popular platform in RoboCup soccer competitions, due to their ability to play soccer off-the-self, and their reasonably low cost. Some Booster Robotics employees are previous RoboCup competitors. 
 
 To download Booster Studio:
 
@@ -82,12 +82,29 @@ These instructions follow the instructions in https://github.com/Samge0/booster-
 4. Install the Booster Match Runner extension.
 5. Click the sidebar drop down and pin the Match Runner extension.
 
+## Set Up the Simulation Docker Image
+
+A mirror of the Booster Docker image is provided, with an entrypoint change to enable vision bounding box detections.
+
+1. Pull the Docker image:
+
+    ```
+    docker pull ysims/boostermq:0.6.5-beta
+    ```
+
+2. Tag the image so that Booster Studio finds and uses it:
+
+    ```
+    docker tag ysims/boostermq:0.6.5-beta \
+        booster-robotics-registry.cn-beijing.cr.aliyuncs.com/virtual-robot/virtual-robot:0.6.5-beta
+    ```
+
 ## Run a Game
 
 Make sure the previous set up instruction have been completed with no errors. These instructions run the local agent code in a 3v3 soccer match.
 
 1. Click the 'Activate, build, deploy and run agent' in the top right corner of Booster Studio to prepare the agent.
-2. In the Match Runner, select your agent (e.g. mqagent) for both teams. The blue team may need reselecting on each new code build, otherwise the blue team container may not update. No not use `mqagent.blue`.
+2. In the Match Runner, select your agent (e.g. mqagent) for both teams. The blue team may need reselecting on each new code build, otherwise the blue team container may not update. Do not use `mqagent.blue`.
 3. Click 'Start match + UI'.
 4. A separate window should launch, with a soccer field and a 3v3 match.
 
@@ -96,5 +113,5 @@ When you have changed code, it is a good idea to reset everything, as it is hard
 1. Click 'End' in the match runner and close the simulation window.
 2. Click 'Activate, build, deploy and run agent'.
 3. Reselect the blue team in the Match Runner. 
-3. Click 'Start Match + UI' in the Match Runner.
+4. Click 'Start Match + UI' in the Match Runner.
 
