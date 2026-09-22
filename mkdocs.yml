@@ -1,0 +1,36 @@
+site_name: MQ Booster Agent
+site_description: Documentation for the MQ Booster Agent soccer-playing robot codebase
+repo_url: https://github.com/ysims/MQBoosterAgent
+repo_name: ysims/MQBoosterAgent
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Getting Started: 01-getting-started.md
+  - Tournament: 02-tournament.md
+  - Agent Subsystems: 03-agent-subsystems.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - toc:
+      permalink: true
