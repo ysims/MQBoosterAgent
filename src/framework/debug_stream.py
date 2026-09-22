@@ -1,7 +1,7 @@
 """Stream live per-tick state as UDP/JSON for an external visual debugger.
 
-Thsi is separate from ``debugdraw`` and ``log_publisher`` (ROS log topic) --
-this script sends one JSON packet per tick out of the container over UDP, 
+This is separate from ``log_publisher`` (ROS log topic) --
+this script sends one JSON packet per tick out of the container over UDP,
 so a plain Python script on the host  can render a live view. 
 
 UDP does not require that anyone is listening, so this will always run in the 

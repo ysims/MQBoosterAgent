@@ -151,88 +151,12 @@ class SoccerRuntime:
         for p in self._players:
             p.context = ctx
 
-        # Begin debug drawing with the world, then let play append strategy markers.
-        from . import debugdraw
-        debugdraw.begin_frame()
-        self._draw_world(ctx)
-
         # Invoke user play(); the framework does not prescribe its behavior.
         self._agent.play(ctx, self._players, self._store)
-
-        debugdraw.flush()
 
         # Log a heartbeat about every two seconds to confirm the loop and data path.
         if self._tick_id % 60 == 0:
             self._log_heartbeat(ctx, dt)
-
-    def _draw_world(self, ctx: Context) -> None:
-        """Draw the field, ball, teammate headings, and opponents."""
-        from . import debugdraw
-        import math
-
-        self._draw_field(ctx)
-
-        # Each teammate's own ball belief is drawn separately. Disagreement between
-        # robots is visible directly as separate dots.
-        for ball in ctx.ball.values():
-            debugdraw.point(
-                ball.x, ball.y, rgb=(1.0, 0.5, 0.0), scale=0.2, ns="ball",
-            )
-        # main.py draws teammate shape and labels because kick state belongs to
-        # Player and roles belong to play(). Runtime only draws headings and opponents.
-        for r in ctx.teammates.values():
-            if r.pose is not None:
-                self._draw_facing(r.pose)
-        for r in ctx.opponents.values():
-            if r.pose is not None:
-                debugdraw.point(r.pose.x, r.pose.y, rgb=(0.2, 0.4, 1.0),
-                                scale=0.3, ns="opponent")
-                self._draw_facing(r.pose)
-
-    def _draw_facing(self, pose) -> None:
-        """Draw a 0.4 m white heading arrow, distinct from velocity headings."""
-        from . import debugdraw
-        import math
-
-        debugdraw.arrow(
-            pose.x, pose.y,
-            pose.x + math.cos(pose.theta) * 0.4,
-            pose.y + math.sin(pose.theta) * 0.4,
-            rgb=(1.0, 1.0, 1.0), ns="facing",
-        )
-
-    def _draw_field(self, ctx: Context) -> None:
-        """Draw field bounds, halfway line, center circle, and goals in gray."""
-        from . import debugdraw
-        import math
-
-        f = ctx.field
-        hl, hw = f.length / 2.0, f.width / 2.0
-        gray = (0.5, 0.5, 0.5)
-        # Outer boundary.
-        debugdraw.line(
-            [(-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw), (-hl, -hw)],
-            rgb=gray, ns="field_bounds",
-        )
-        # Halfway line.
-        debugdraw.line([(0.0, -hw), (0.0, hw)], rgb=gray, ns="field_midline")
-        # Center circle approximated by a polygon.
-        r = f.circle_radius
-        circle = [
-            (r * math.cos(a), r * math.sin(a))
-            for a in [i * math.pi / 12 for i in range(25)]
-        ]
-        debugdraw.line(circle, rgb=gray, ns="field_circle")
-        # Goal frames with half-goal width and 0.6 m depth.
-        gw = f.goal_width / 2.0
-        depth = 0.6
-        for sx in (-1.0, 1.0):
-            fx = sx * hl
-            bx = sx * (hl + depth)
-            debugdraw.line(
-                [(fx, -gw), (bx, -gw), (bx, gw), (fx, gw)],
-                rgb=gray, ns="field_goal",
-            )
 
     def _log_heartbeat(self, ctx: Context, dt: float) -> None:
         ball_repr = (

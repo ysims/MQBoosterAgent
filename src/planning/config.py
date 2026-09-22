@@ -90,9 +90,3 @@ HEAD_YAW_MAX = 0.6              # Clamp on head yaw (rad) either direction
 SEARCH_MEMORY_SEC = 5.0
 
 SEARCH_TURN_RATE = 1.0  # In-place turn rate (rad/s) once memory goes stale
-
-# ======================================================================
-# Visualization
-# ======================================================================
-
-KICK_TARGET_MARK_SIZE_M = 0.18

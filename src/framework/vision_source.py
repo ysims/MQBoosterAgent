@@ -217,8 +217,7 @@ class VisionContextSource:
         self._opponent_tracker = OpponentGroundTruthTracker(self._node, self._config)
         self._create_game_subscription()
         self._start_spin()
-        from . import debug_stream, debugdraw, log_publisher
-        debugdraw.install(self._node)
+        from . import debug_stream, log_publisher
         log_publisher.install(self._node)
         debug_stream.install()
         _log.info(
