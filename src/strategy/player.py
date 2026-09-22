@@ -24,7 +24,6 @@ import time
 from typing import TYPE_CHECKING
 
 from ..framework.types import BallState, Context, Penalty, Pose2D
-from ..framework import debugdraw
 
 from ..motion.config import (
     ANGULAR_GAIN,
@@ -41,7 +40,7 @@ from ..motion.config import (
     OMNI_DIST,
     TURN_THRESHOLD,
 )
-from ..planning.config import PLAN_LOOKAHEAD, SEARCH_TURN_RATE, USE_GLOBAL_PATH_PLANNER
+from ..planning.config import SEARCH_TURN_RATE, USE_GLOBAL_PATH_PLANNER
 from ..planning.gaze_planning import plan_head_angle as _plan_head_angle
 from ..planning.kick_planning import plan_kick as _plan_kick
 from ..planning.path_planning import (
@@ -283,7 +282,7 @@ class Player:
             # motion.backend.RobotBackend.set_velocity() unconditionally
             # drops commands while _kicking is True. A caller that keeps
             # calling kick() every frame regardless of ball visibility (e.g.
-            # _act_our_kickoff, which has no ball check of its own) would
+            # act_our_kickoff, which has no ball check of its own) would
             # otherwise leave this player permanently frozen the moment its
             # own ball detection drops out.
             _log.warning("player %d kick skipped: ball unknown", self.id)
@@ -466,29 +465,6 @@ class Player:
         else:
             heading = goal_dir
 
-        # Visualize the target (green), direct line (gray), planned heading
-        # (yellow), and forward lookahead probe (cyan).
-        debugdraw.point(tx, ty, rgb=(0.0, 1.0, 0.0), scale=0.15, ns="target")
-        debugdraw.line([(pose.x, pose.y), (tx, ty)], rgb=(0.4, 0.4, 0.4), ns="to_target")
-        if planned_path is not None and len(planned_path) >= 2:
-            debugdraw.line(planned_path, rgb=(0.2, 0.8, 1.0), ns="global_path")
-        if waypoint is not None:
-            debugdraw.point(
-                waypoint[0], waypoint[1],
-                rgb=(0.2, 0.8, 1.0), scale=0.12, ns="global_waypoint",
-            )
-        debugdraw.arrow(
-            pose.x, pose.y,
-            pose.x + math.cos(heading) * 0.6, pose.y + math.sin(heading) * 0.6,
-            rgb=(1.0, 1.0, 0.0), ns="heading",
-        )
-        debugdraw.line(
-            [(pose.x, pose.y),
-             (pose.x + math.cos(heading) * PLAN_LOOKAHEAD,
-              pose.y + math.sin(heading) * PLAN_LOOKAHEAD)],
-            rgb=(0.0, 0.8, 0.8), ns="lookahead",
-        )
-
         if distance <= OMNI_DIST:
             # Nearby: translate along heading while turning toward face.
             wdx, wdy = math.cos(heading) * distance, math.sin(heading) * distance
@@ -632,9 +608,6 @@ class Player:
             )
 
         self.action = "guard:home"
-        debugdraw.point(
-            home[0], home[1], rgb=(0.0, 0.6, 1.0), scale=0.2, ns="guard_home",
-        )
         self.walk_to(home, face=face, avoid_ball=True, avoid_robots=True)
 
         # walk_to() just pointed the head at `home` (its own walk target),
