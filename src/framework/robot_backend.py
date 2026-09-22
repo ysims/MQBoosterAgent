@@ -1,20 +1,17 @@
-"""BoosterRobot SDK wrapper providing one backend handle per player.
+"""BoosterRobot SDK connection: one per player.
 
 This Docker-only platform layer depends on boosteros.robots.booster and is
-imported only where the SDK is installed. Player uses ``_backend`` for chassis,
-kicking, and slow operations but does not import this module. The agent injects
-it during runtime construction, keeping player.py platform-independent.
-
-SDK method names match calls verified in the legacy implementation.
+imported only where the SDK is installed. Owns the raw SDK connection and its
+slow-operation worker thread; action-level policy (mode gating, kick
+hysteresis) lives in ``motion.backend.RobotBackend``, which wraps this class.
+Player uses that wrapper for chassis, kicking, and slow operations but does
+not import either module directly -- the agent injects the wrapper during
+runtime construction, keeping player.py platform-independent.
 
 Slow operations such as ``request_mode`` and ``get_up`` are synchronous SDK
-calls that can take seconds. Each backend runs them on a worker thread so the
+calls that can take seconds. This class runs them on a worker thread so the
 main loop remains nonblocking. A single overwrite slot retains only the latest
 request.
-
-Users manage mode through request_mode; see section 5 of docs/new_design.md.
-Velocity and kick commands are sent only when ``_mode == "walk"`` to avoid
-repeated SDK 400 errors in other modes.
 """
 
 from __future__ import annotations
@@ -27,19 +24,20 @@ from typing import Callable, cast
 from boosteros.robots.booster import BoosterRobot, SoccerKickManager
 
 
-__all__ = ["RobotBackend"]
+__all__ = ["SdkConnection"]
 
 
 _log = logging.getLogger(__name__)
 
 _GET_UP_THROTTLE_SEC = 1.0
+_GET_UP_TIMEOUT_SEC = 30.0
 
 
-class RobotBackend:
-    """SDK wrapper and slow-operation worker for one player.
+class SdkConnection:
+    """Own the BoosterRobot SDK connection and its slow-operation worker.
 
-    The mixin creates and injects it into Player. Runtime closes it, including
-    the worker, during shutdown.
+    Exposes raw SDK actions and connection state (mode, fall-down state)
+    without any action-level policy -- see the module docstring.
     """
 
     def __init__(self, player_id: int, robot_name: str) -> None:
@@ -50,11 +48,10 @@ class RobotBackend:
             enable_tf_listener=False,
             timeout=10.0,
         )
-        self._kick_manager = SoccerKickManager(self._robot)
+        self.kick_manager = SoccerKickManager(self._robot)
         self._mode: str | None = None   # Confirmed SDK mode, updated by worker
         self._fall_down_state: str | None = None
         self._fall_down_recoverable: bool = False
-        self._kicking = False
 
         # Slow-operation worker with one overwrite slot and a wake event.
         self._pending: tuple[str, object] | None = None
@@ -70,7 +67,7 @@ class RobotBackend:
         self._worker.start()
 
         _log.info(
-            "RobotBackend created: player_id=%d robot_name=%s",
+            "SdkConnection created: player_id=%d robot_name=%s",
             player_id, robot_name,
         )
 
@@ -80,7 +77,13 @@ class RobotBackend:
         self._wake.set()
         if self._worker.is_alive():
             self._worker.join(timeout=2.0)
-        self.release_kick()
+        try:
+            self.kick_manager.stop()
+        except Exception as exc:
+            _log.warning(
+                "player %d kick_manager stop on close failed: %s",
+                self._player_id, exc,
+            )
         try:
             self._robot.set_velocity(vx=0.0, vy=0.0, vyaw=0.0)
         except Exception as exc:
@@ -110,19 +113,10 @@ class RobotBackend:
         return self._fall_down_recoverable
 
     # ------------------------------------------------------------------
-    # Chassis control (step 1)
+    # Raw chassis control
     # ------------------------------------------------------------------
 
-    def set_velocity(self, vx: float, vy: float, vyaw: float) -> None:
-        """Set chassis velocity unless kicking or outside walk mode."""
-        if self._kicking:
-            return
-        if self._mode != "walk":
-            _log.debug(
-                "player %d set_velocity skipped: mode=%s (call request_mode first)",
-                self._player_id, self._mode,
-            )
-            return
+    def raw_set_velocity(self, vx: float, vy: float, vyaw: float) -> None:
         try:
             self._robot.set_velocity(vx=vx, vy=vy, vyaw=vyaw)
         except Exception as exc:
@@ -131,45 +125,23 @@ class RobotBackend:
                 self._player_id, vx, vy, vyaw, exc,
             )
 
-    # ------------------------------------------------------------------
-    # Kicking (step 2); inputs use body coordinates
-    # ------------------------------------------------------------------
+    def raw_set_head_angle(self, pitch: float, yaw: float) -> None:
+        """Set head pitch/yaw (rad); positive pitch is down, positive yaw is left.
 
-    def kick(
-        self, direction: float, power: float, ball_x: float, ball_y: float,
-    ) -> None:
-        """Start or update a body-frame kick while in walk mode."""
-        if self._mode != "walk":
-            _log.debug(
-                "player %d kick skipped: mode=%s (call request_mode first)",
-                self._player_id, self._mode,
+        Out-of-limit values don't raise -- the SDK just stops responding to
+        head commands, per its own docs -- so an unexpectedly still head is
+        a clamping/limit problem, not a silent failure to look for here.
+        """
+        try:
+            self._robot.set_head_angle(pitch=pitch, yaw=yaw)
+        except Exception as exc:
+            _log.warning(
+                "player %d set_head_angle(%.3f,%.3f) failed: %s",
+                self._player_id, pitch, yaw, exc,
             )
-            return
-        try:
-            if not self._kicking:
-                self._kick_manager.start()
-                self._kicking = True
-                _log.info("player %d kick started", self._player_id)
-            self._kick_manager.update_command(direction=direction, power=power)
-            self._kick_manager.update_ball(x=ball_x, y=ball_y)
-        except Exception as exc:
-            _log.warning("player %d kick failed: %s", self._player_id, exc)
-            self._kicking = False
-
-    def release_kick(self) -> None:
-        """End the kick so the chassis accepts set_velocity again."""
-        if not self._kicking:
-            return
-        try:
-            self._kick_manager.stop()
-            _log.info("player %d kick released", self._player_id)
-        except Exception as exc:
-            _log.warning("player %d kick stop failed: %s", self._player_id, exc)
-        finally:
-            self._kicking = False
 
     # ------------------------------------------------------------------
-    # Slow operations (step 3), executed nonblockingly by the worker
+    # Slow operations, executed nonblockingly by the worker
     # ------------------------------------------------------------------
 
     def request_mode(self, mode: str) -> None:
@@ -252,11 +224,19 @@ class RobotBackend:
             _log.warning("player %d set_mode(%s) failed: %s", self._player_id, mode, exc)
 
     def _exec_get_up(self) -> None:
+        # get_up() is asynchronous -- it returns a TaskHandle immediately,
+        # before the robot has actually finished standing. 
+        # To address this, add a wait. This is safe, as it runs on the dedicated worker thread, not
+        # the 30 Hz control loop.
         try:
-            self._robot.get_up()
+            handle = self._robot.get_up()
+            status = handle.wait(timeout=_GET_UP_TIMEOUT_SEC)
             self._mode = None   # Mode is unknown after getting up; request it again.
             self._fall_down_state = None
             self._fall_down_recoverable = False
-            _log.info("player %d get_up done", self._player_id)
+            _log.info("player %d get_up finished: %s", self._player_id, status)
         except Exception as exc:
+            # Leave state untouched on failure -- the next _poll_fall_down_state
+            # call (every worker cycle, before any pending intent is processed)
+            # will pick up the state
             _log.warning("player %d get_up failed: %s", self._player_id, exc)

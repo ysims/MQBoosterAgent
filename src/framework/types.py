@@ -1,7 +1,7 @@
 """Core data types: the framework's data contract layer.
 
-The fields map directly to section 9 of docs/new_design.md. This module has no
-ROS or boosteros dependencies and can be imported, tested, and reloaded alone.
+This module has no ROS or boosteros dependencies and can be imported,
+tested, and reloaded alone.
 """
 
 from __future__ import annotations
@@ -108,8 +108,8 @@ class Pose2D:
 class FieldDimensions:
     """Field geometry dimensions, containing values only.
 
-    Geometry helpers such as ``opponent_goal`` belong in the standard library
-    or user code. See section 9.3 of docs/new_design.md.
+    Geometry helpers such as ``opponent_goal`` belong in ``utils/geom.py``
+    or user code.
     """
 
     length: float
@@ -219,7 +219,8 @@ class GameControlState:
 class Context:
     """Read-only snapshot built by the framework for each call to ``play()``.
 
-    See section 9 of docs/new_design.md for detailed field semantics.
+    ``ball`` is keyed by player_id. Each robot's belief comes only from its own camera. 
+    A missing key means that robot doesn't currently see the ball.
     """
 
     now: float
@@ -227,7 +228,7 @@ class Context:
     team_id: int
     field: FieldDimensions
     game: GameControlState | None = None
-    ball: BallState | None = None
+    ball: dict[int, BallState] = field(default_factory=dict)
     teammates: dict[int, RobotState] = field(default_factory=dict)
     opponents: dict[int, RobotState] = field(default_factory=dict)
 
@@ -236,13 +237,13 @@ class Context:
 class WorldSnapshot:
     """Raw per-frame snapshot supplied by the framework's data source.
 
-    A data source such as ROS ground truth only supplies the latest observations
-    and their ``last_seen_at`` values. Runtime applies freshness filtering and
-    replaces stale data with None when building Context. See section 9.3 of
-    docs/new_design.md.
+    A data source only supplies the latest observations and their
+    ``last_seen_at`` values. Runtime applies freshness filtering and
+    replaces stale data with None when building Context. ``ball`` is
+    per-robot; see ``Context.ball``.
     """
 
     game: GameControlState | None = None
-    ball: BallState | None = None
+    ball: dict[int, BallState] = field(default_factory=dict)
     teammates: dict[int, RobotState] = field(default_factory=dict)
     opponents: dict[int, RobotState] = field(default_factory=dict)

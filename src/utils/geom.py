@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 
 from ..framework.types import Context
-from ..param import GOAL_TARGET_DEPTH_M
+from ..planning.config import GOAL_TARGET_DEPTH_M
 
 
 def clamp(v: float, lo: float, hi: float) -> float:

@@ -37,7 +37,7 @@ Todo: see if this can be automated.
 Booster Studio runs the 3v3 match simulator from a `virtual-robot/virtual-robot` image on `booster-robotics-registry.cn-beijing.cr.aliyuncs.com`.
 
 1. The registry is blocked on some networks.
-2. The stock image's 3v3 match scene does not include vision bounding box detections, instead expecting robots to using ground truth data. We want to include the vision pipeline in the code for educational purposes, and so the Docker image adds bounding box detections to the scene.
+2. The stock image's 3v3 match scene does not include vision bounding box detections by default. We want the vision pipeline available for educational purposes, so the Docker image adds bounding box detections to the scene.
 
 `Dockerfile.sim` builds on top of Booster's image, fixing the above issues. The scene file it needs to patch doesn't exist in the image itself, though -- Booster Studio copies it in after creating the container but before starting it -- so instead of patching at build time, the image overrides the container's startup command with a wrapper (`entrypoint_wrapper.sh`) that patches the scene right after Booster Studio's copy lands, then hands off to the original startup script.
 

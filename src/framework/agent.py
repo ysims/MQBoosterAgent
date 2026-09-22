@@ -8,13 +8,12 @@ only user base because SoccerAgent, rather than AgentBase, would be direct.
 The solution is to place framework behavior in a mixin that does not inherit
 AgentBase. User entry classes declare
 ``class MyAgent(SoccerAgentMixin, AgentBase)`` so AgentBase remains direct.
-
-See section 8 of docs/new_design.md for the detailed API.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Callable
 
 from booster_agent_framework import AgentFeatures
@@ -25,9 +24,10 @@ from .runtime import SoccerRuntime
 if TYPE_CHECKING:
     from types import SimpleNamespace
 
-    from ..player import Player
+    from ..localisation.protocols import Localiser
+    from ..strategy.player import Player
+    from ..vision.types import Detection2D
     from .types import Context
-    from .vision_types import Detection2D, Localiser
 
 
 __all__ = ["SoccerAgentMixin"]
@@ -109,16 +109,15 @@ class SoccerAgentMixin:
     def init_store(self, store: "SimpleNamespace") -> None:
         """Subclasses may override this default no-op."""
 
-    # Hook 4: localiser default for perception_mode="vision" (the default).
-    # main.py sets this explicitly from src.vision so the swap point is
-    # obvious; ignored when perception_mode="ground_truth".
+    # Hook 4: self-pose localiser. strategy/main.py sets this explicitly from
+    # odometry.dead_reckoning so the swap point is obvious.
     localiser_class: "type[Localiser]"
 
     # Hook 5: converts one pixel-space ball Detection2D (from the sim's
     # detection_extension) into a robot-frame (forward, left) position, or
-    # None for a degenerate detection. main.py sets this to
-    # src.vision.estimate_ball_position (wrapped in staticmethod so it isn't
-    # bound as a method); ignored when perception_mode="ground_truth".
+    # None for a degenerate detection. strategy/main.py sets this to
+    # vision.ball_detection.estimate_ball_position (wrapped in staticmethod
+    # so it isn't bound as a method).
     ball_position_estimator: "Callable[[Detection2D], tuple[float, float] | None]"
 
     # ------------------------------------------------------------------
@@ -140,16 +139,11 @@ class SoccerAgentMixin:
         )
 
     def _create_context_source(self):
-        """Build the ContextSource per ``config.perception_mode``.
+        """Build the ContextSource: always vision-based.
 
-        Both imports are delayed Docker-only ROS imports, mirroring
-        ``_create_backends``, so rclpy is not required for development.
+        Delayed Docker-only ROS import, mirroring ``_create_backends``, so
+        rclpy is not required for development.
         """
-        if self.config.perception_mode == "ground_truth":
-            from .ros_source import RosContextSource
-
-            return RosContextSource(self.config)
-
         from .vision_source import VisionContextSource
 
         return VisionContextSource(
@@ -160,7 +154,7 @@ class SoccerAgentMixin:
 
     def _create_backends(self) -> None:
         """Create each player's SDK backend through a delayed Docker-only import."""
-        from .robot_backend import RobotBackend
+        from ..motion.backend import RobotBackend
 
         for player in self.runtime._players:
             robot_name = self.config.robot_names[player.id - 1]
@@ -172,15 +166,24 @@ class SoccerAgentMixin:
         AgentBase provides ``self.logger`` after ``super().__init__``. Install
         the bridge once and remove an old bridge before repeated activation to
         prevent duplicate output.
+
+        Level is read from ``SOCCER_LOG_LEVEL`` (default ``INFO``) -- set it
+        to ``WARNING``, ``ERROR``, or ``CRITICAL`` to quiet things down
+        without editing code, since debugging noise (tick heartbeats,
+        per-robot vision stats, state-change lines) is otherwise logged at
+        INFO throughout the codebase.
         """
+
+        level_name = os.environ.get("SOCCER_LOG_LEVEL", "INFO").upper()
+        level = getattr(logging, level_name, logging.INFO)
 
         platform_logger = getattr(self, "logger", None)
         if platform_logger is None:
             # Fall back to stderr if the theoretically required logger is absent.
-            logging.basicConfig(level=logging.INFO)
+            logging.basicConfig(level=level)
             return
         root = logging.getLogger()
-        root.setLevel(logging.INFO)
+        root.setLevel(level)
         for handler in list(root.handlers):
             if isinstance(handler, _PlatformLogHandler):
                 root.removeHandler(handler)

@@ -2,13 +2,15 @@
 
 Platform primitives such as ``set_velocity``, ``kick``, ``release_kick``,
 ``request_mode``, and ``get_up`` delegate to the injected framework
-``_backend``. State properties such as ``pose``, ``mode``, ``is_fallen``, and
-``penalty`` read from ``self.context`` or the backend.
+``_backend`` (see ``motion.backend.RobotBackend``). State properties such as
+``pose``, ``mode``, ``is_fallen``, and ``penalty`` read from ``self.context``
+or the backend.
 
 Movement behaviors such as ``walk_to``, ``face_to``, and ``ensure_ready`` are
 also Player methods because they command this player and may need cross-frame
-state for hysteresis or avoidance. Pure coordinate calculations such as
-``dist``, ``angle_to``, and goal coordinates belong in utils/geom.
+state for hysteresis or avoidance -- they call into ``planning`` for path and
+kick decisions. Pure coordinate calculations such as ``dist``, ``angle_to``,
+and goal coordinates belong in utils/geom.
 
 Instances live for the entire match, while the framework replaces
 ``self.context`` every frame. Add custom skills directly to this class.
@@ -18,13 +20,38 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from typing import TYPE_CHECKING
 
-from .framework.types import Context, Penalty, Pose2D
-from .framework import debugdraw
+from ..framework.types import BallState, Context, Penalty, Pose2D
 
-from .param import *
-from .utils.geom import (
+from ..motion.config import (
+    ANGULAR_GAIN,
+    ARRIVE_DIST,
+    PREPARE_SETTLE_SEC,
+    CHASE_BEHIND_M,
+    KICK_ENTER_M,
+    KICK_EXIT_M,
+    KICK_POWER_MAX,
+    KICK_POWER_MIN,
+    LINEAR_GAIN,
+    MAX_ANGULAR,
+    MAX_LINEAR,
+    OMNI_DIST,
+    TURN_THRESHOLD,
+)
+from ..planning.config import SEARCH_TURN_RATE, USE_GLOBAL_PATH_PLANNER
+from ..planning.gaze_planning import plan_head_angle as _plan_head_angle
+from ..planning.kick_planning import plan_kick as _plan_kick
+from ..planning.path_planning import (
+    collect_obstacles,
+    path_waypoint,
+    plan_global_path,
+    plan_local_heading,
+)
+from ..planning.search_planning import plan_search_target as _plan_search_target
+from ..planning.config import KICK_POWER_DEFAULT
+from ..utils.geom import (
     angle_to,
     clamp,
     dist,
@@ -33,41 +60,22 @@ from .utils.geom import (
     own_goal,
     own_goal_area_center,
 )
-from .utils.obstacles import collect_obstacles
-from .utils.path_planner import plan_global_path
+from .config import (
+    GUARD_FACE_BALL,
+    KICKOFF_FRONT_MARGIN,
+    KICKOFF_LATERAL_TOL,
+    KICKOFF_STAGE_M,
+    SUPPORT_DIST_M,
+)
 
 if TYPE_CHECKING:
-    from .framework.config import SoccerConfig
+    from ..framework.config import SoccerConfig
 
 
 __all__ = ["Player"]
 
 
 _log = logging.getLogger(__name__)
-
-def _heading_clearance(
-    px: float, py: float, heading: float, obstacles: list,
-) -> float:
-    """Return clearance along a lookahead ray for local obstacle avoidance.
-
-    Only obstacles ahead of (px, py), with projection t > 0, block this heading.
-    Ignoring obstacles behind or to the rear prevents a nearby rear obstacle
-    from reducing clearance in every direction. Return infinity when clear;
-    larger values mean more space and negative values indicate a collision.
-    """
-    ux, uy = math.cos(heading), math.sin(heading)
-    min_clear = math.inf
-    for obs in obstacles:
-        t = (obs.x - px) * ux + (obs.y - py) * uy
-        if t <= 0.0:
-            continue                      # Rear obstacles do not block this heading.
-        if t > PLAN_LOOKAHEAD:
-            t = PLAN_LOOKAHEAD
-        nx, ny = px + ux * t, py + uy * t
-        clear = math.hypot(obs.x - nx, obs.y - ny) - obs.radius
-        if clear < min_clear:
-            min_clear = clear
-    return min_clear
 
 
 def _behind_ball(
@@ -111,8 +119,17 @@ class Player:
         self._mode: str | None = None
         self._fall_down_state: str | None = None
 
+        # When we first observed "prepare" mode, for PREPARE_SETTLE_SEC in
+        # ensure_ready(); None means not currently tracking a prepare wait.
+        self._prepare_entered_at: float | None = None
+
         # Cross-frame detour-side memory; None means no active detour.
         self._avoid_side: float | None = None
+
+        # Last field-frame position this player's own vision saw the ball,
+        # and when -- used by _search_for_ball() once ball detection lapses.
+        self._last_ball_seen: tuple[float, float] | None = None
+        self._last_ball_seen_at: float | None = None
 
         # Cross-frame kick hysteresis state.
         self._kicking: bool = False
@@ -143,6 +160,26 @@ class Player:
             return None
         robot = ctx.teammates.get(self.id)
         return None if robot is None else robot.pose
+
+    @property
+    def ball(self) -> BallState | None:
+        """This player's own ball belief, from its own detections.
+
+        Also caches the reading into ``_last_ball_seen``/
+        ``_last_ball_seen_at`` whenever one is available, so
+        ``_search_for_ball`` has something to fall back on once this returns
+        None -- every caller reads through this property, so caching here
+        (rather than requiring each caller to remember to) is the only way
+        to guarantee it never gets missed.
+        """
+        ctx = self.context
+        if ctx is None:
+            return None
+        ball = ctx.ball.get(self.id)
+        if ball is not None:
+            self._last_ball_seen = (ball.x, ball.y)
+            self._last_ball_seen_at = ctx.now
+        return ball
 
     @property
     def mode(self) -> str | None:
@@ -189,6 +226,23 @@ class Player:
         self.release_kick()
         self.set_velocity(0.0, 0.0, 0.0)
 
+    def set_head_angle(self, pitch: float, yaw: float) -> None:
+        if self._backend is None:
+            _log.debug(
+                "player %d set_head_angle pitch=%.3f yaw=%.3f (no backend)",
+                self.id, pitch, yaw,
+            )
+            return
+        self._backend.set_head_angle(pitch, yaw)
+
+    def look_at(self, target: tuple[float, float]) -> None:
+        """Point the head toward ``target``; see planning.gaze_planning."""
+        angles = _plan_head_angle(self.pose, target)
+        if angles is None:
+            return
+        pitch, yaw = angles
+        self.set_head_angle(pitch, yaw)
+
     # ------------------------------------------------------------------
     # Kicking
     # ------------------------------------------------------------------
@@ -201,29 +255,61 @@ class Player:
         pose = self.pose
         if pose is None:
             _log.warning("player %d kick skipped: pose unknown", self.id)
+            self.release_kick()
             return
 
-        ball = self.context.ball if self.context is not None else None
-        if ball is None:
+        ball = self.ball
+        if ball is not None:
+            bx, by = ball.x, ball.y
+        elif self._kicking:
+            # A kick already in progress shouldn't abort over a single
+            # missed detection -- the kick motion itself (leg/torso
+            # movement) can legitimately block the camera's view of the
+            # ball for a frame or two. Keep aiming at the last known
+            # position instead of releasing on the first missed frame.
+            now = self.context.now if self.context is not None else None
+            remembered = _plan_search_target(
+                self._last_ball_seen, self._last_ball_seen_at, now,
+            )
+            if remembered is None:
+                _log.warning("player %d kick skipped: ball unknown", self.id)
+                self.release_kick()
+                return
+            bx, by = remembered
+        else:
+            # Release rather than just warn: kick() only sets self._kicking
+            # True in the success path below, never clears it here, and
+            # motion.backend.RobotBackend.set_velocity() unconditionally
+            # drops commands while _kicking is True. A caller that keeps
+            # calling kick() every frame regardless of ball visibility (e.g.
+            # act_our_kickoff, which has no ball check of its own) would
+            # otherwise leave this player permanently frozen the moment its
+            # own ball detection drops out.
             _log.warning("player %d kick skipped: ball unknown", self.id)
+            self.release_kick()
             return
 
         if kick_direction is None:
-            kick_plan = self.plan_kick()
+            # Use the already-resolved bx/by (real or remembered), not
+            # self.plan_kick()'s fresh self.ball read -- that would fail
+            # here for the same reason the top-of-method check needed the
+            # memory fallback in the first place.
+            kick_plan = _plan_kick(self.context, BallState(x=bx, y=by))
             if kick_plan is None:
                 _log.warning("player %d kick skipped: kick plan unavailable", self.id)
+                self.release_kick()
                 return
             kick_direction, power = kick_plan
 
         if self._backend is None:
             _log.debug(
                 "player %d kick ball=(%.3f, %.3f) dir=%.3f (no backend)",
-                self.id, ball.x, ball.y, kick_direction,
+                self.id, bx, by, kick_direction,
             )
             return
         # Transform field coordinates to body coordinates using the current pose.
-        dx = ball.x - pose.x
-        dy = ball.y - pose.y
+        dx = bx - pose.x
+        dy = by - pose.y
         cos_t = math.cos(pose.theta)
         sin_t = math.sin(pose.theta)
         ball_x_body = dx * cos_t + dy * sin_t
@@ -235,68 +321,8 @@ class Player:
         self._backend.kick(direction_body, power_clamped, ball_x_body, ball_y_body)
 
     def plan_kick(self) -> tuple[float, float] | None:
-        """Calculate kick direction and power.
-
-        Aim from the current ball position toward the opponent's goal center.
-        Return ``(kick_direction, kick_power)``, or None when the ball or context
-        is unavailable.
-        """
-        ctx = self.context
-        ball = ctx.ball if ctx is not None else None
-        if ctx is None or ball is None:
-            return None
-
-        kick_target = opponent_goal(ctx)
-        kick_direction = angle_to(ball.x, ball.y, *kick_target)
-        kick_target = self._goal_target_for_direction(kick_direction)
-        kick_power = (
-            KICK_POWER_BACKFIELD if self._in_backfield()
-            else KICK_POWER_DEFAULT
-        )
-
-        self._draw_kick_target(kick_target)
-        return kick_direction, kick_power
-
-    def _goal_target_for_direction(
-        self, kick_direction: float,
-    ) -> tuple[float, float]:
-        """Project the shot direction onto the opponent's goal line for display."""
-        ctx = self.context
-        ball = ctx.ball if ctx is not None else None
-        if ctx is None or ball is None:
-            return (0.0, 0.0)
-
-        dx = math.cos(kick_direction)
-        if dx <= 1e-6:
-            return opponent_goal(ctx)
-        goal_x = ctx.field.length / 2.0
-        t = max(0.0, (goal_x - ball.x) / dx)
-        return (goal_x, ball.y + math.sin(kick_direction) * t)
-
-    def _in_backfield(self) -> bool:
-        """Return whether the ball is in our half, where kicks use more power."""
-        ctx = self.context
-        ball = ctx.ball if ctx is not None else None
-        if ctx is None or ball is None:
-            return False
-        # own_penalty_edge_x = -ctx.field.length / 2.0 + ctx.field.penalty_area_length
-        # return ball.x < own_penalty_edge_x
-        return ball.x < 0
-
-    def _draw_kick_target(self, target: tuple[float, float]) -> None:
-        """Mark the kick target selected by plan_kick with an X."""
-        from .framework import debugdraw
-
-        x, y = target
-        s = KICK_TARGET_MARK_SIZE_M
-        debugdraw.line(
-            [(x - s, y - s), (x + s, y + s)],
-            rgb=(1.0, 0.0, 1.0), ns="kick_target",
-        )
-        debugdraw.line(
-            [(x - s, y + s), (x + s, y - s)],
-            rgb=(1.0, 0.0, 1.0), ns="kick_target",
-        )
+        """Calculate kick direction and power; see planning.kick_planning."""
+        return _plan_kick(self.context, self.ball)
 
     def release_kick(self) -> None:
         self._kicking = False  # Clear kick hysteresis and cube visualization.
@@ -304,32 +330,6 @@ class Player:
             _log.debug("player %d release_kick (no backend)", self.id)
             return
         self._backend.release_kick()
-
-    def kick_can_score(self, kick_direction: float) -> bool:
-        """Return whether a straight kick in ``kick_direction`` can score.
-        """
-        ctx = self.context
-        ball = ctx.ball if ctx is not None else None
-        if ctx is None or ball is None:
-            return False
-
-        goal_x = ctx.field.length / 2.0
-        dx = math.cos(kick_direction)
-        dy = math.sin(kick_direction)
-        if dx <= 1e-6:
-            return False
-
-        half_goal = ctx.field.goal_width / 2.0
-        if half_goal <= 0.0:
-            return False
-        if ball.x >= goal_x:
-            y_at_goal = ball.y
-        else:
-            t = (goal_x - ball.x) / dx
-            if t < 0.0:
-                return False
-            y_at_goal = ball.y + dy * t
-        return -half_goal <= y_at_goal <= half_goal
 
     # ------------------------------------------------------------------
     # Slow operations, invoked asynchronously to avoid blocking
@@ -354,15 +354,35 @@ class Player:
     def ensure_ready(self) -> bool:
         """Recover from falls and switch to walk mode asynchronously.
 
+        The SDK only allows ``damping -> prepare -> walk``, never
+        ``damping -> walk`` directly (``set_mode`` raises if the transition
+        isn't supported) -- a robot that spawns upright in ``"damping"``
+        mode is never "fallen", so it needs the explicit "prepare" step
+        here rather than reaching "prepare" as a side effect of ``get_up()``.
+
         Return whether the player is ready to act during this frame.
         """
         if self.is_fallen:
+            self._prepare_entered_at = None
             self.get_up()
             return False
-        if self.mode != "walk":
-            self.request_mode("walk")
+        if self.mode == "walk":
+            self._prepare_entered_at = None
+            return True
+        if self.mode != "prepare":
+            self._prepare_entered_at = None
+            self.request_mode("prepare")
             return False
-        return True
+        # In "prepare": wait for it to physically settle before asking for
+        # "walk" -- see PREPARE_SETTLE_SEC's docstring.
+        now = time.monotonic()
+        if self._prepare_entered_at is None:
+            self._prepare_entered_at = now
+            return False
+        if now - self._prepare_entered_at < PREPARE_SETTLE_SEC:
+            return False
+        self.request_mode("walk")
+        return False
 
     def face_to(self, target_theta: float) -> None:
         """Turn in place to the target heading."""
@@ -383,12 +403,11 @@ class Player:
     ) -> bool:
         """Walk toward a target point and return whether it has been reached.
 
-        With ``avoid_ball`` or ``avoid_robots`` enabled, the simplified VFH
-        local planner models the ball, robots, and goals as circular obstacles.
-        It scans candidate headings and selects the one closest to the target
-        that remains collision-free over ``PLAN_LOOKAHEAD``. This handles
-        multiple obstacles, concave structures, and symmetric conflicts more
-        reliably than single-obstacle detours or potential-field repulsion.
+        With ``avoid_ball`` or ``avoid_robots`` enabled, ``planning`` collects
+        obstacles and either finds a global A* path or falls back to a
+        simplified VFH local planner that scans candidate headings and picks
+        the one closest to the target that remains collision-free over
+        ``PLAN_LOOKAHEAD``.
 
         Nearby targets use omnidirectional walking; distant targets use a
         turn-walk-turn sequence. ``face`` sets the heading near or at the target.
@@ -398,6 +417,8 @@ class Player:
         if pose is None:
             self.stop()
             return False
+
+        self.look_at(target)
 
         tx, ty = target
         dx = tx - pose.x
@@ -416,7 +437,7 @@ class Player:
                 self.stop()
             return True
 
-        # Prefer global A* planning and fall back to the legacy local planner.
+        # Prefer global A* planning and fall back to the local planner.
         goal_dir = math.atan2(dy, dx)
         planned_path: list[tuple[float, float]] | None = None
         waypoint: tuple[float, float] | None = None
@@ -425,6 +446,7 @@ class Player:
                 self.context, self.id,
                 ball=avoid_ball, robots=avoid_robots,
                 goals=(avoid_ball or avoid_robots),
+                ball_state=self.ball,
             )
             if USE_GLOBAL_PATH_PLANNER:
                 planned_path = plan_global_path(
@@ -434,38 +456,14 @@ class Player:
                     obstacles,
                 )
                 if planned_path is not None:
-                    waypoint = self._path_waypoint(pose, planned_path)
+                    waypoint = path_waypoint(pose, planned_path)
                     heading = angle_to(pose.x, pose.y, waypoint[0], waypoint[1])
                 else:
-                    heading = self._plan_heading(pose, goal_dir, obstacles)
+                    heading = plan_local_heading(self.id, pose, goal_dir, obstacles)
             else:
-                heading = self._plan_heading(pose, goal_dir, obstacles)
+                heading = plan_local_heading(self.id, pose, goal_dir, obstacles)
         else:
             heading = goal_dir
-
-        # Visualize the target (green), direct line (gray), planned heading
-        # (yellow), and forward lookahead probe (cyan).
-        from .framework import debugdraw
-        debugdraw.point(tx, ty, rgb=(0.0, 1.0, 0.0), scale=0.15, ns="target")
-        debugdraw.line([(pose.x, pose.y), (tx, ty)], rgb=(0.4, 0.4, 0.4), ns="to_target")
-        if planned_path is not None and len(planned_path) >= 2:
-            debugdraw.line(planned_path, rgb=(0.2, 0.8, 1.0), ns="global_path")
-        if waypoint is not None:
-            debugdraw.point(
-                waypoint[0], waypoint[1],
-                rgb=(0.2, 0.8, 1.0), scale=0.12, ns="global_waypoint",
-            )
-        debugdraw.arrow(
-            pose.x, pose.y,
-            pose.x + math.cos(heading) * 0.6, pose.y + math.sin(heading) * 0.6,
-            rgb=(1.0, 1.0, 0.0), ns="heading",
-        )
-        debugdraw.line(
-            [(pose.x, pose.y),
-             (pose.x + math.cos(heading) * PLAN_LOOKAHEAD,
-              pose.y + math.sin(heading) * PLAN_LOOKAHEAD)],
-            rgb=(0.0, 0.8, 0.8), ns="lookahead",
-        )
 
         if distance <= OMNI_DIST:
             # Nearby: translate along heading while turning toward face.
@@ -494,87 +492,9 @@ class Player:
                 self.set_velocity(vx, 0.0, self._angular(angle_err))
         return False
 
-    def _path_waypoint(
-        self, pose: Pose2D, path: list[tuple[float, float]],
-    ) -> tuple[float, float]:
-        """Pick a short lookahead waypoint from a planned global path."""
-        if not path:
-            return (pose.x, pose.y)
-        prev = (pose.x, pose.y)
-        points = path[1:] if len(path) > 1 else path
-        for point in points:
-            seg_len = dist(prev[0], prev[1], point[0], point[1])
-            if seg_len >= GLOBAL_PATH_LOOKAHEAD_M:
-                ratio = GLOBAL_PATH_LOOKAHEAD_M / max(seg_len, 1e-6)
-                return (
-                    prev[0] + (point[0] - prev[0]) * ratio,
-                    prev[1] + (point[1] - prev[1]) * ratio,
-                )
-            prev = point
-        return path[-1]
-
-    def _plan_heading(
-        self, pose: Pose2D, goal_dir: float, obstacles: list,
-    ) -> float:
-        """Choose the clearest candidate heading nearest the target direction.
-
-        Candidates are tested by increasing absolute offset from the target.
-        Player ID parity chooses which side is tried first, breaking symmetry
-        when two players avoid each other.
-        """
-        sign_first = 1.0 if self.id % 2 == 0 else -1.0
-        best_h = goal_dir
-        best_clear = -math.inf
-
-        offsets = [0.0]
-        k = 1
-        while k * PLAN_STEP <= PLAN_MAX_OFFSET + 1e-9:
-            offsets.append(sign_first * k * PLAN_STEP)
-            offsets.append(-sign_first * k * PLAN_STEP)
-            k += 1
-
-        for off in offsets:
-            h = goal_dir + off
-            clear = _heading_clearance(pose.x, pose.y, h, obstacles)
-            if clear >= PLAN_CLEARANCE:
-                return h
-            if clear > best_clear:
-                best_clear, best_h = clear, h
-        return best_h
-
     # ------------------------------------------------------------------
     # High-level actions called directly by the strategy in main.py
     # ------------------------------------------------------------------
-
-
-    def block_path_projection(
-        self, opponent_id: int,
-    ) -> tuple[float, float, float, float] | None:
-        """Project this player onto an opponent-to-ball segment.
-
-        Return ``(x, y, perpendicular_distance, segment_parameter_t)``.
-        """
-        ctx = self.context
-        pose = self.pose
-        ball = ctx.ball if ctx is not None else None
-        opponent = ctx.opponents.get(opponent_id) if ctx is not None else None
-        if ctx is None or pose is None or ball is None or opponent is None:
-            return None
-        if opponent.pose is None:
-            return None
-
-        ax, ay = opponent.pose.x, opponent.pose.y
-        bx, by = ball.x, ball.y
-        vx, vy = bx - ax, by - ay
-        length2 = vx * vx + vy * vy
-        if length2 < 1e-6:
-            return None
-
-        raw_t = ((pose.x - ax) * vx + (pose.y - ay) * vy) / length2
-        t = clamp(raw_t, 0.0, 1.0)
-        tx = ax + vx * t
-        ty = ay + vy * t
-        return tx, ty, dist(pose.x, pose.y, tx, ty), raw_t
 
     def attack(self, kick_target: tuple[float, float] | None = None) -> None:
         """Chase the ball and shoot toward ``kick_target`` or the opponent goal.
@@ -585,17 +505,38 @@ class Player:
         ``CHASE_BEHIND_M`` behind the ball on the ball-to-goal line, naturally
         aligning the player for a shot on arrival.
         """
-        ball = self.context.ball if self.context is not None else None
-        if ball is None or self.pose is None:
+        if self.pose is None or self.context is None:
             self.stop()
             return
+
+        ball = self.ball
+        if ball is not None:
+            bx, by = ball.x, ball.y
+        elif self._kicking:
+            # Don't drop out of a kick already underway over one missed
+            # frame -- see kick()'s matching fallback for why. Chasing
+            # (the `else` branch below) has no such carve-out: it's only
+            # the commitment of an in-progress kick that's worth protecting.
+            now = self.context.now
+            remembered = _plan_search_target(
+                self._last_ball_seen, self._last_ball_seen_at, now,
+            )
+            if remembered is None:
+                self._search_for_ball()
+                return
+            bx, by = remembered
+        else:
+            self._search_for_ball()
+            return
+
         if kick_target is None:
             kick_target = opponent_goal(self.context)
 
-        d = dist(self.pose.x, self.pose.y, ball.x, ball.y)
+        d = dist(self.pose.x, self.pose.y, bx, by)
         self._kicking = d <= (KICK_EXIT_M if self._kicking else KICK_ENTER_M)
         if self._kicking:
-            kick_plan = self.plan_kick()
+            self.look_at((bx, by))
+            kick_plan = _plan_kick(self.context, BallState(x=bx, y=by))
             if kick_plan is None:
                 self.stop()
                 return
@@ -604,13 +545,52 @@ class Player:
         else:
             self.release_kick()
             self.walk_to(
-                _behind_ball(ball.x, ball.y, kick_target, CHASE_BEHIND_M)
+                _behind_ball(bx, by, kick_target, CHASE_BEHIND_M)
             )
+
+    def _search_for_ball(self, *, walk: bool = True) -> None:
+        """Look for the ball once this player's own detection has lapsed.
+
+        Looking toward wherever it was last seen -- it's usually still
+        nearby -- gives a real chance of reacquiring it, rather than
+        staring blankly or freezing outright. With ``walk`` True (the
+        default, used by ``attack``/``support``), also walks toward that
+        remembered position, or turns in place once memory has gone stale
+        (see planning.search_planning) to sweep the camera across more of
+        the field. With ``walk`` False (used by ``guard``, which shouldn't
+        abandon its post to chase a memory), only the head moves; sets
+        ``self.action`` only in the walking case, since the non-walking
+        case is a supplement to whatever the caller is already doing, not
+        a replacement for it.
+
+        Combined with the attacker-switch cooldown in strategy/main.py,
+        this is what actually uses that cooldown window productively
+        instead of just idling through it.
+        """
+        now = self.context.now if self.context is not None else None
+        target = _plan_search_target(self._last_ball_seen, self._last_ball_seen_at, now)
+
+        if not walk:
+            if target is not None:
+                self.look_at(target)
+            return
+
+        self.action = "searching"
+        if target is not None:
+            self.look_at(target)
+            self.walk_to(target, avoid_ball=False, avoid_robots=True)
+        else:
+            self.release_kick()
+            self.set_velocity(0.0, 0.0, SEARCH_TURN_RATE)
 
     def guard(self) -> None:
         """Guard from the center of the goal area.
 
         Fall back to that position when no active threat is available.
+        Doesn't abandon its post to chase a remembered ball position the
+        way ``attack``/``support`` do -- a defender wandering off is worse
+        than a defender that's temporarily unsure where the ball is -- but
+        still actively looks for it rather than staring at a fixed heading.
         """
         home = own_goal_area_center(self.context) if self.context is not None else None
         if home is None or self.pose is None:
@@ -618,7 +598,7 @@ class Player:
             self.stop()
             return
 
-        ball = self.context.ball if self.context is not None else None
+        ball = self.ball
 
         # Face the ball for faster reactions, or the opponent's goal if unseen.
         face = 0.0
@@ -628,24 +608,44 @@ class Player:
             )
 
         self.action = "guard:home"
-        debugdraw.point(
-            home[0], home[1], rgb=(0.0, 0.6, 1.0), scale=0.2, ns="guard_home",
-        )
         self.walk_to(home, face=face, avoid_ball=True, avoid_robots=True)
+
+        # walk_to() just pointed the head at `home` (its own walk target),
+        # which isn't useful for finding the ball -- override that here.
+        if ball is not None:
+            self.look_at((ball.x, ball.y))
+        else:
+            self._search_for_ball(walk=False)
 
     def support(self) -> None:
         """Support on the ball-to-own-goal line at ``SUPPORT_DIST_M``.
 
-        This places the player on a blocking line between the ball and our goal.
+        This places the player on a blocking line between the ball and our
+        goal. Without its own ball reading, falls back to the last
+        remembered position (see planning.search_planning) so it doesn't
+        just freeze in place the moment its own vision loses the ball, and
+        further back to actively searching (like ``attack``) once that's
+        stale too, rather than holding a static position with no idea
+        where the ball actually is.
         """
         ctx = self.context
-        ball = ctx.ball if ctx is not None else None
-        if ctx is None or ball is None:
+        if ctx is None or self.pose is None:
             self.stop()
             return
+        ball = self.ball
+        if ball is not None:
+            bx, by = ball.x, ball.y
+        else:
+            now = ctx.now
+            remembered = _plan_search_target(
+                self._last_ball_seen, self._last_ball_seen_at, now,
+            )
+            if remembered is None:
+                self._search_for_ball()
+                return
+            bx, by = remembered
 
         gx, gy = own_goal(ctx)
-        bx, by = (ball.x, ball.y)
         dx, dy = gx - bx, gy - by
         d = math.hypot(dx, dy)
         if d < 1e-6:
@@ -663,10 +663,14 @@ class Player:
         ty = clamp(ty, -half_w, half_w)
         self.move_to_position((tx, ty))
 
+        # move_to_position() -> walk_to() just pointed the head at (tx, ty)
+        # (the support spot itself), not the ball -- override that here.
+        self.look_at((bx, by))
+
     def take_kickoff(self, kick_target: tuple[float, float] | None = None) -> None:
         """Stage behind the ball for our restart, then approach and kick."""
-        ball = self.context.ball if self.context is not None else None
-        if ball is None or self.pose is None:
+        ball = self.ball
+        if ball is None or self.pose is None or self.context is None:
             self.stop()
             return
         if kick_target is None:
@@ -676,6 +680,7 @@ class Player:
         rel_x, rel_y = self.pose.x - ball.x, self.pose.y - ball.y
         behind = rel_x * cos_k + rel_y * sin_k          # Negative is our side.
         lateral = abs(-rel_x * sin_k + rel_y * cos_k)
+        from .config import KICKOFF_FRONT_MARGIN, KICKOFF_LATERAL_TOL, KICKOFF_STAGE_M
         if behind > KICKOFF_FRONT_MARGIN or lateral > KICKOFF_LATERAL_TOL:
             stage = (
                 ball.x - cos_k * KICKOFF_STAGE_M,
@@ -692,7 +697,7 @@ class Player:
             self.stop()
             return
         face = None
-        ball = self.context.ball if self.context is not None else None
+        ball = self.ball
         if ball is not None and self.pose is not None:
             face = angle_to(self.pose.x, self.pose.y, ball.x, ball.y)
         self.release_kick()
