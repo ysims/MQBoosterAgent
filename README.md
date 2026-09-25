@@ -1,14 +1,9 @@
-Simplified Version of Booster Champion 3v3 Soccer Tournament agent
+# Macquarie University Booster Champion 3v3 Soccer Tournament Agent
 
-This strategy framework has been greatly simplified to make it easier for players to implement, but it still needs optimization to achieve the best results. Players should try it out thoroughly in a simulation environment and only use it in the competition after successful debugging.
+This agent is specifically designed as a learning tool for students. It touches on areas including computer vision, odometry filters, localisation, robot motions, agent strategy and planning. 
 
-# How to use
-1. Download [Booster Studio](https://studio.booster.tech/)
-2. Open this project from Booster Studio
-3. Waiting for environment prepare
-4. Select a Virtual Robot
-4. Just click "Activate, build, deploy and run agent"
+Refer to the website at https://ysims.github.io/MQBoosterAgent/ for full set up instructions and other documentation on the tournament and the base implementation.
 
-# References
+## References
 [BoosterOS Developer API Document](https://booster.feishu.cn/wiki/Fjj9wJS4OivUSaksW2HctpVonTh)
 [Booster Agent Developer Guide](https://itq6ucn0mk.feishu.cn/wiki/J0FywI2CdinfU0kKLKycNiqfnwc?from=from_copylink)
