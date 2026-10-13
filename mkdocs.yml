@@ -23,7 +23,7 @@ theme:
     - content.action.edit
 
 nav:
-  - Home: index.md
+  - Home: 01-home.md
   - Getting Started: 01-getting-started.md
   - Tournament: 02-tournament.md
   - Agent Subsystems: 03-agent-subsystems.md
