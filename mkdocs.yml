@@ -24,9 +24,9 @@ theme:
 
 nav:
   - Home: 01-home.md
-  - Getting Started: 01-getting-started.md
-  - Tournament: 02-tournament.md
+  - Getting Started: 02-getting-started.md
   - Agent Subsystems: 03-agent-subsystems.md
+  - Tournament Overview: 04-tournament-overview.md
 
 markdown_extensions:
   - admonition
