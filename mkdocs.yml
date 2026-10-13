@@ -27,6 +27,7 @@ nav:
   - Getting Started: 02-getting-started.md
   - Agent Subsystems: 03-agent-subsystems.md
   - Tournament Overview: 04-tournament-overview.md
+  - Tournament Rules: 05-tournament-rules.md
 
 markdown_extensions:
   - admonition
