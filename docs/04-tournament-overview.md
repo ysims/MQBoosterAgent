@@ -12,9 +12,11 @@ You don't need to be an experienced programmer or robotics researcher to take pa
 
 The tournament will run in **Semester 1, 2027**. Teams of 2-4 Macquarie University students will develop their agents throughout the semester and compete in a final tournament after exams.
 
-Students can get involved via the [student sign-up form](https://forms.cloud.microsoft/r/APx2nSgwnE) and staff can get involved via the [staff sign-up form](https://forms.cloud.microsoft/r/L3P2f967FF).
+Students and staff can join the mailing list by completing the [mailing list sign-up form](https://forms.cloud.microsoft/r/AuX75Q94gj). This does not register you for the tournament.
 
-You are welcome to reach out to the tournament organiser at ysobel.sims@mq.edu.au.
+Students can get involved via the [student sign-up form](https://forms.cloud.microsoft/r/APx2nSgwnE) and staff can get involved via the [staff expression of interest form](https://forms.cloud.microsoft/r/L3P2f967FF).
+
+You are welcome to reach out to the tournament organiser at [ysobel.sims@mq.edu.au](mailto:ysobel.sims@mq.edu.au).
 
 ## What will you build?
 
@@ -28,14 +30,14 @@ The competition is open to different approaches. You don't need to develop a com
 
 The following is the planned schedule. Specific dates, times, and locations will be announced closer to the start of the tournament.
 
-| When | What's happening |
-| --- | --- |
-| Beginning of semester | Introduction session |
-| Weeks 2-7 | Workshops |
-| Mid-semester break | Test tournament |
-| Weeks 8-12 | Repeat workshops |
-| Beginning of July | Final tournament and awards |
-| Winter break | Team showcase |
+| When                  | What's happening            |
+| --------------------- | --------------------------- |
+| Beginning of semester | Introduction session        |
+| Weeks 2-7             | Workshops                   |
+| Mid-semester break    | Test tournament             |
+| Weeks 8-12            | Repeat workshops            |
+| Beginning of July     | Final tournament and awards |
+| Winter break          | Team showcase               |
 
 We are investigating the use of a computer lab in building 4RPD for workshops and the installation of Booster Studio. Further details will be announced when arrangements are confirmed.
 
@@ -98,10 +100,11 @@ We welcome undergraduate and postgraduate students from across Macquarie Univers
 **Eligibility:**
 
 - You must be a current Macquarie University student to compete.
-- Teams should have 2-4 members.
-- One person from each team must register using their and their teammate's Macquarie ID and email address.
+- Teams must have 2-4 members. You don't need to have a team to register, as we can help match you with other participants.
 
-Complete the [sign-up form](https://forms.cloud.microsoft/r/APx2nSgwnE) to register.
+Complete the [student sign-up form](https://forms.cloud.microsoft/r/APx2nSgwnE) to register. If you already have a team, each team member should complete the form and provide the same team details. If you're registering individually, we'll help you find teammates.
+
+Macquarie University staff are also welcome to get involved. Please complete the [staff expression of interest form](https://forms.cloud.microsoft/r/L3P2f967FF) if you are interested. While staff are not competing in the tournament, there are many ways to contribute.
 
 ### Finding a team
 
