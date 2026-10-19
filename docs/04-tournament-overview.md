@@ -12,6 +12,10 @@ You don't need to be an experienced programmer or robotics researcher to take pa
 
 The tournament will run in **Semester 1, 2027**. Teams of 2-4 Macquarie University students will develop their agents throughout the semester and compete in a final tournament after exams.
 
+Students can get involved via the [student sign-up form](https://forms.cloud.microsoft/r/APx2nSgwnE) and staff can get involved via the [staff sign-up form](https://forms.cloud.microsoft/r/L3P2f967FF).
+
+You are welcome to reach out to the tournament organiser at ysobel.sims@mq.edu.au.
+
 ## What will you build?
 
 Each team will develop a Python software agent that controls a simulated Booster Robotics K1 humanoid robot playing soccer. The simulation runs in Booster Studio, which handles the underlying robot and game environment. Your agent interacts with this environment through the information and commands made available to it.
@@ -98,7 +102,7 @@ We welcome undergraduate and postgraduate students from across Macquarie Univers
 - Each participant must register using their Macquarie ID and email address.
 - Your email address will be used for tournament-related correspondence.
 
-Registration details and the sign-up form will be provided separately.
+Complete the [sign-up form](https://forms.cloud.microsoft/r/APx2nSgwnE) to register.
 
 ### Finding a team
 
@@ -110,7 +114,7 @@ Teams are encouraged to bring together people with different strengths. Solo par
 
 ### Staff involvement
 
-Macquarie University staff members who are interested in supporting or contributing to the tournament can fill in the staff form or contact the tournament organiser.
+Macquarie University staff members who are interested in supporting or contributing to the tournament can fill in the [staff form](https://forms.cloud.microsoft/r/L3P2f967FF) or contact the tournament organiser.
 
 ## AI and computational requirements
 
