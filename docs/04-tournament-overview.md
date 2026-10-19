@@ -99,8 +99,7 @@ We welcome undergraduate and postgraduate students from across Macquarie Univers
 
 - You must be a current Macquarie University student to compete.
 - Teams should have 2-4 members.
-- Each participant must register using their Macquarie ID and email address.
-- Your email address will be used for tournament-related correspondence.
+- One person from each team must register using their and their teammate's Macquarie ID and email address.
 
 Complete the [sign-up form](https://forms.cloud.microsoft/r/APx2nSgwnE) to register.
 
