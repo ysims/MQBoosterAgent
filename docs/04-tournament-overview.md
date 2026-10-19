@@ -8,7 +8,7 @@ The tournament is inspired by [RoboCup](https://www.robocup.org/), an internatio
 
 You don't need to build a physical robot. Instead, you'll develop the software that tells a simulated robot how to perceive the game, make decisions, and play soccer. Starter code is available on [GitHub](https://github.com/ysims/MQAgent), so you can begin with a functioning agent and customise it to suit your ideas.
 
-You don't need to be an experienced programmer or robotics researcher to take part. Perhaps you're interested in AI, software engineering, mathematical optimisation, logic, system design, or developing clever soccer strategies. Maybe you'd rather focus on testing ideas, tuning algorithms, or working out how your agent should play the game. There are plenty of ways to contribute, and teams benefit from bringing together people with different skills and interests.
+You don't need to be an experienced programmer or robotics researcher to take part. Perhaps you're interested in AI, software engineering, mathematical optimisation, logic, or system design. Maybe you'd rather focus on testing ideas, tuning algorithms, or working out how your agent should play the game. There are plenty of ways to contribute, and teams benefit from bringing together people with different skills and interests.
 
 The tournament will run in **Semester 1, 2027**. Teams of 2-4 Macquarie University students will develop their agents throughout the semester and compete in a final tournament after exams.
 
